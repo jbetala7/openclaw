@@ -78,10 +78,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import {
-  createToolSearchCodeModeTools,
-  resolveToolSearchCodeModeConfig,
-} from "./tool-search-code-mode.js";
+import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -709,9 +706,9 @@ export function createOpenClawCodingTools(options?: {
           },
           resolvedConfig: options?.config,
         });
-  const toolSearchCodeModeTools =
-    includeOpenClawTools && resolveToolSearchCodeModeConfig(options?.config).enabled
-      ? createToolSearchCodeModeTools({
+  const toolSearchTools =
+    includeOpenClawTools && resolveToolSearchConfig(options?.config).enabled
+      ? createToolSearchTools({
           config: options?.config,
           runtimeConfig: options?.config,
           agentId,
@@ -802,7 +799,7 @@ export function createOpenClawCodingTools(options?: {
           recordToolPrepStage: options?.recordToolPrepStage,
         })
       : pluginToolsOnly),
-    ...toolSearchCodeModeTools,
+    ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
   const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;

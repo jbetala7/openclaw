@@ -174,10 +174,10 @@ import {
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
-  addClientToolsToToolSearchCodeModeCatalog,
-  applyToolSearchCodeModeCatalog,
-  clearToolSearchCodeModeCatalog,
-} from "../../tool-search-code-mode.js";
+  addClientToolsToToolSearchCatalog,
+  applyToolSearchCatalog,
+  clearToolSearchCatalog,
+} from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -1130,7 +1130,7 @@ export async function runEmbeddedAttempt(
       warn: (message) => log.warn(message),
     });
     let effectiveTools = [...tools, ...filteredBundledTools];
-    const toolSearchCodeMode = applyToolSearchCodeModeCatalog({
+    const toolSearch = applyToolSearchCatalog({
       tools: effectiveTools,
       config: params.config,
       sessionId: params.sessionId,
@@ -1152,11 +1152,11 @@ export async function runEmbeddedAttempt(
         onToolOutcome: params.onToolOutcome,
       },
     });
-    effectiveTools = toolSearchCodeMode.tools;
-    if (toolSearchCodeMode.compacted) {
-      prepStages.mark("tool-search-code-mode");
+    effectiveTools = toolSearch.tools;
+    if (toolSearch.compacted) {
+      prepStages.mark("tool-search");
       log.info(
-        `tool-search-code-mode: cataloged ${toolSearchCodeMode.catalogToolCount} tools behind compact prompt surface`,
+        `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
       );
     }
     prepStages.mark("bundle-tools");
@@ -1684,17 +1684,17 @@ export async function runEmbeddedAttempt(
             },
           )
         : [];
-      const clientToolSearchCodeMode = addClientToolsToToolSearchCodeModeCatalog({
+      const clientToolSearch = addClientToolsToToolSearchCatalog({
         tools: clientToolDefs,
         config: params.config,
         sessionId: params.sessionId,
         sessionKey: sandboxSessionKey,
         agentId: sessionAgentId,
       });
-      clientToolDefs = clientToolSearchCodeMode.tools;
-      if (clientToolSearchCodeMode.compacted) {
+      clientToolDefs = clientToolSearch.tools;
+      if (clientToolSearch.compacted) {
         log.info(
-          `tool-search-code-mode: cataloged ${clientToolSearchCodeMode.catalogToolCount} client tools behind compact prompt surface`,
+          `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
         );
       }
 
@@ -3877,7 +3877,7 @@ export async function runEmbeddedAttempt(
       // See: https://github.com/openclaw/openclaw/issues/8643
       let cleanupError: unknown;
       try {
-        clearToolSearchCodeModeCatalog({
+        clearToolSearchCatalog({
           sessionId: params.sessionId,
           sessionKey: sandboxSessionKey,
           agentId: sessionAgentId,

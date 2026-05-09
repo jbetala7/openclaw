@@ -347,6 +347,29 @@ describe("config schema", () => {
     expect(parsed?.experimental?.planTool).toBe(true);
   });
 
+  it("accepts simplified Tool Search config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ toolSearch: true })?.toolSearch).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        toolSearch: {
+          enabled: true,
+          mode: "tools",
+        },
+      })?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+    });
+    expect(
+      ToolsSchema.safeParse({
+        toolSearch: {
+          enabled: true,
+          mode: "both",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {

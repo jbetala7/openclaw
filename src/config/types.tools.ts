@@ -190,24 +190,14 @@ export type ToolLoopDetectionConfig = {
   postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
-export type ToolSearchCodeModeConfig = {
-  /** Enable compact search/call cataloging for large tool sets. Default: false. */
-  enabled?: boolean;
-  /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "both" exposes both. */
-  mode?: "code" | "tools" | "both";
-  /** Catalog OpenClaw-owned tools. Default: true. */
-  includeOpenClawTools?: boolean;
-  /** Catalog MCP tools exposed through OpenClaw. Default: true. */
-  includeMcpTools?: boolean;
-  /** Catalog client/app tools passed into the PI session. Default: true. */
-  includeClientTools?: boolean;
-  /** Wall-clock timeout for model-authored code snippets, in ms. Default: 10000. */
-  codeTimeoutMs?: number;
-  /** Default search result limit. Default: 8. */
-  searchDefaultLimit?: number;
-  /** Maximum search result limit. Default: 20. */
-  maxSearchLimit?: number;
-};
+export type ToolSearchConfig =
+  | boolean
+  | {
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled?: boolean;
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
+      mode?: "code" | "tools";
+    };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
@@ -676,7 +666,7 @@ export type ToolsConfig = {
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
-  toolSearchCodeMode?: ToolSearchCodeModeConfig;
+  toolSearch?: ToolSearchConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */

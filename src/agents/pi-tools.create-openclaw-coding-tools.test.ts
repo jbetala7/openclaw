@@ -155,13 +155,11 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
   });
 
-  it("adds core Tool Search Code Mode control tools when enabled", () => {
+  it("adds core Tool Search control tools when enabled", () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
-          toolSearchCodeMode: {
-            enabled: true,
-          },
+          toolSearch: true,
         },
       },
     });
