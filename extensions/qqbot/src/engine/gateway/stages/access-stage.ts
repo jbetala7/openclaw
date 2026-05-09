@@ -1,43 +1,20 @@
-/**
- * Access stage — resolves routing target + runs access control.
- *
- * Split from the pipeline so it is trivially unit-testable: given a raw
- * event and the runtime's routing info, the stage returns either:
- *   - `{ kind: "allow", ... }` — proceed through the rest of the pipeline
- *   - `{ kind: "block", context }` — short-circuit; the caller returns
- *     `context` directly to its own caller.
- */
-
-import type { QQBotAccessResult } from "../../access/index.js";
+import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { InboundContext, InboundPipelineDeps } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
 import { buildBlockedInboundContext } from "./stub-contexts.js";
 
-// ─────────────────────────── Types ───────────────────────────
+type AccessStageResult =
+  | {
+      kind: "allow";
+      isGroupChat: boolean;
+      peerId: string;
+      qualifiedTarget: string;
+      fromAddress: string;
+      route: { sessionKey: string; accountId: string; agentId?: string };
+      access: QQBotInboundAccess;
+    }
+  | { kind: "block"; context: InboundContext };
 
-interface AccessStageAllow {
-  kind: "allow";
-  isGroupChat: boolean;
-  peerId: string;
-  qualifiedTarget: string;
-  fromAddress: string;
-  route: { sessionKey: string; accountId: string; agentId?: string };
-  access: QQBotAccessResult;
-}
-
-interface AccessStageBlock {
-  kind: "block";
-  context: InboundContext;
-}
-
-type AccessStageResult = AccessStageAllow | AccessStageBlock;
-
-// ─────────────────────────── Stage ───────────────────────────
-
-/**
- * Resolve the routing target, walk the access policy, and decide whether
- * the inbound message should proceed to the rest of the pipeline.
- */
 export async function runAccessStage(
   event: QueuedMessage,
   deps: InboundPipelineDeps,
@@ -67,11 +44,10 @@ export async function runAccessStage(
     groupPolicy: account.config?.groupPolicy,
   });
 
-  if (access.decision !== "allow") {
+  if (access.senderAccess.decision !== "allow") {
     log?.info(
-      `Blocked qqbot inbound: decision=${access.decision} reasonCode=${access.reasonCode} ` +
-        `reason=${access.reason} senderId=${event.senderId} ` +
-        `accountId=${account.accountId} isGroup=${isGroupChat}`,
+      `Blocked qqbot inbound: decision=${access.senderAccess.decision} reasonCode=${access.senderAccess.reasonCode} ` +
+        `senderId=${event.senderId} accountId=${account.accountId} isGroup=${isGroupChat}`,
     );
     return {
       kind: "block",
@@ -109,7 +85,7 @@ function resolvePeerId(event: QueuedMessage, isGroupChat: boolean): string {
   }
   if (isGroupChat) {
     return "unknown";
-  } // defensive, should never hit
+  }
   return event.senderId;
 }
 
@@ -120,22 +96,4 @@ function buildQualifiedTarget(event: QueuedMessage, isGroupChat: boolean): strin
       : `qqbot:group:${event.groupOpenid}`;
   }
   return event.type === "dm" ? `qqbot:dm:${event.guildId}` : `qqbot:c2c:${event.senderId}`;
-}
-
-/**
- * Decide whether the access decision permits running text-based control
- * commands. Placed in the access stage because the rule is an
- * access-policy derivative, not a gate derivative.
- */
-export function resolveCommandAuthorized(access: QQBotAccessResult): boolean {
-  if (typeof access.commandAuthorized === "boolean") {
-    return access.commandAuthorized;
-  }
-  return (
-    access.reasonCode === "dm_policy_open" ||
-    access.reasonCode === "dm_policy_allowlisted" ||
-    (access.reasonCode === "group_policy_allowed" &&
-      access.effectiveGroupAllowFrom.length > 0 &&
-      access.groupPolicy === "allowlist")
-  );
 }

@@ -1,3 +1,4 @@
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -21,7 +22,6 @@ import {
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
-import { resolveDiscordCommandAuthorizersWithIngress } from "./dm-command-auth.js";
 import { formatDiscordUserTag } from "./format.js";
 
 function resolveComponentRuntimeGroupPolicy(ctx: AgentComponentContext) {
@@ -314,13 +314,7 @@ export async function resolveComponentCommandAuthorized(params: {
       ]
     : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
 
-  return await resolveDiscordCommandAuthorizersWithIngress({
-    accountId: ctx.accountId,
-    sender: {
-      id: interactionCtx.user.id,
-      name: interactionCtx.user.username,
-      tag: formatDiscordUserTag(interactionCtx.user),
-    },
+  return resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     authorizers,
     modeWhenAccessGroupsOff: "configured",

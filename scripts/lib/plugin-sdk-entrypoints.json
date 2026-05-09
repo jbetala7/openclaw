@@ -131,6 +131,7 @@
   "account-resolution",
   "account-resolution-runtime",
   "agent-config-primitives",
+  "access-groups",
   "allow-from",
   "allowlist-config-edit",
   "browser-config",

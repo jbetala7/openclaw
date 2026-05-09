@@ -5,11 +5,11 @@ import {
 } from "../auto-reply/command-status-builders.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { type AccessGroupMembershipResolver } from "./access-groups.js";
 import {
-  defineChannelIngressIdentity,
-  resolveChannelMessageIngress,
-} from "./channel-ingress-runtime.js";
+  expandAllowFromWithAccessGroups,
+  type AccessGroupMembershipResolver,
+} from "./access-groups.js";
+import { resolveDmGroupAccessWithLists } from "./channel-access-compat.js";
 export {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
   expandAllowFromWithAccessGroups,
@@ -160,29 +160,6 @@ export function resolveDirectDmAuthorizationOutcome(params: {
   return "allowed";
 }
 
-function normalizeCommandAuthDmPolicy(policy: string | null | undefined) {
-  return policy === "pairing" ||
-    policy === "allowlist" ||
-    policy === "open" ||
-    policy === "disabled"
-    ? policy
-    : "allowlist";
-}
-
-function createSenderCommandIngressIdentity(params: {
-  senderId: string;
-  isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
-}) {
-  return defineChannelIngressIdentity({
-    primary: {
-      key: "sender-id",
-    },
-    matchEntry({ entry }) {
-      return entry.value === "*" || params.isSenderAllowed(params.senderId, [entry.value]);
-    },
-  });
-}
-
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export async function resolveSenderCommandAuthorizationWithRuntime(
   params: ResolveSenderCommandAuthorizationWithRuntimeParams,
@@ -205,69 +182,82 @@ export async function resolveSenderCommandAuthorization(
   commandAuthorized: boolean | undefined;
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
+  const storeAllowFrom =
+    !params.isGroup && params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
+      ? await params.readAllowFromStore().catch(() => [])
+      : [];
   const channel = params.channel;
   const accountId = params.accountId ?? "default";
-  const resolveAccessGroupMembership = params.resolveAccessGroupMembership;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  const resolved = await resolveChannelMessageIngress({
-    channelId: channel ?? "command-auth",
-    accountId,
-    identity: createSenderCommandIngressIdentity({
-      senderId: params.senderId,
-      isSenderAllowed: params.isSenderAllowed,
-    }),
-    subject: { stableId: params.senderId },
-    conversation: {
-      kind: params.isGroup ? "group" : "direct",
-      id: params.senderId,
-    },
-    event: {
-      kind: "message",
-      authMode: "none",
-      mayPair: false,
-    },
-    accessGroups: params.cfg.accessGroups,
-    resolveAccessGroupMembership:
-      channel && resolveAccessGroupMembership
-        ? async ({ name, group, channelId, accountId }) =>
-            await resolveAccessGroupMembership({
-              cfg: params.cfg,
-              name,
-              group,
-              channel: channelId as ChannelId,
-              accountId,
-              senderId: params.senderId,
-            })
-        : undefined,
-    policy: {
-      dmPolicy: normalizeCommandAuthDmPolicy(params.dmPolicy),
-      groupPolicy: "open",
-    },
-    allowFrom: params.configuredAllowFrom,
-    groupAllowFrom: params.configuredGroupAllowFrom ?? [],
-    readStoreAllowFrom: async () => {
-      return await params.readAllowFromStore().catch(() => []);
-    },
-    command: {
-      useAccessGroups,
-      allowTextCommands: false,
-      hasControlCommand: shouldComputeAuth,
-      directGroupAllowFrom: "effective",
-    },
+  let configuredAllowFrom = params.configuredAllowFrom;
+  let configuredGroupAllowFrom = params.configuredGroupAllowFrom ?? [];
+  let dmStoreAllowFrom = storeAllowFrom;
+  if (channel) {
+    [configuredAllowFrom, configuredGroupAllowFrom] = await Promise.all([
+      expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: params.configuredAllowFrom,
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      }),
+      expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: params.configuredGroupAllowFrom ?? [],
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      }),
+    ]);
+    if (!params.isGroup) {
+      dmStoreAllowFrom = await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: storeAllowFrom,
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      });
+    }
+  }
+  const access = resolveDmGroupAccessWithLists({
+    isGroup: params.isGroup,
+    dmPolicy: params.dmPolicy,
+    groupPolicy: "allowlist",
+    allowFrom: configuredAllowFrom,
+    groupAllowFrom: configuredGroupAllowFrom,
+    storeAllowFrom: dmStoreAllowFrom,
+    isSenderAllowed: (allowFrom) => params.isSenderAllowed(params.senderId, allowFrom),
   });
-  const effectiveAllowFrom = resolved.senderAccess.effectiveAllowFrom;
-  const effectiveGroupAllowFrom = resolved.senderAccess.effectiveGroupAllowFrom;
+  const effectiveAllowFrom = access.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
+  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
   );
+  const ownerAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
+  const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
+  const commandAuthorized = shouldComputeAuth
+    ? (params.resolveCommandAuthorizedFromAuthorizers?.({
+        useAccessGroups,
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+        ],
+      }) ?? senderAllowedForCommands)
+    : undefined;
 
   return {
     shouldComputeAuth,
     effectiveAllowFrom,
     effectiveGroupAllowFrom,
     senderAllowedForCommands,
-    commandAuthorized: shouldComputeAuth ? resolved.commandAccess.authorized : undefined,
+    commandAuthorized,
   };
 }
 

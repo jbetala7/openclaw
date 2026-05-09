@@ -431,7 +431,7 @@ async function authorizeSynologyWebhook(params: {
     allowedUserIds: params.account.allowedUserIds,
   });
   if (!auth.senderAccess.allowed) {
-    if (auth.senderAccess.ingressReasonCode === "dm_policy_disabled") {
+    if (auth.senderAccess.reasonCode === "dm_policy_disabled") {
       return { ok: false, statusCode: 403, error: "DMs are disabled" };
     }
     if (params.account.dmPolicy === "allowlist" && params.account.allowedUserIds.length === 0) {

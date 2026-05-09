@@ -54,9 +54,7 @@ function installRuntime(params?: {
   const runtime = {
     channel: {
       turn: {
-        runPrepared: vi.fn(async ({ runDispatch }: { runDispatch: () => Promise<void> }) => {
-          await runDispatch();
-        }),
+        runAssembled: vi.fn(async () => undefined),
       },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
@@ -252,7 +250,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime,
     });
 
-    expect(coreRuntime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.turn.runAssembled).not.toHaveBeenCalled();
     expect(buildMentionRegexes).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "nextcloud-talk: drop control command (unauthorized) target=user-1",

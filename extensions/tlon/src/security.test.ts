@@ -11,7 +11,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractCites,
-  resolveTlonDmAccessWithIngress,
   resolveTlonCommandAuthorizationWithIngress,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
@@ -124,31 +123,6 @@ describe("Security: DM Allowlist", () => {
       const allowlist = [" ~zod ", "~bus"];
       await expectDmAllowed("~zod", allowlist, true);
       await expectDmAllowed(" ~zod ", allowlist, true);
-    });
-
-    it("matches DM allowlist decisions through channel ingress", async () => {
-      await expect(resolveTlonDmAccessWithIngress("~zod", [])).resolves.toMatchObject({
-        senderAccess: { allowed: false },
-      });
-      await expect(resolveTlonDmAccessWithIngress("zod", ["~zod"])).resolves.toMatchObject({
-        senderAccess: { allowed: true },
-      });
-      await expect(resolveTlonDmAccessWithIngress("~nec", ["~zod"])).resolves.toMatchObject({
-        senderAccess: { allowed: false },
-      });
-    });
-
-    it("redacts Tlon ship names and allowlist entries from ingress state/decision", async () => {
-      const access = await resolveTlonDmAccessWithIngress("~raw-sensitive-ship", [
-        "~raw-sensitive-ship",
-      ]);
-
-      const serialized = JSON.stringify({
-        state: access.state,
-        decision: access.ingress,
-      });
-      expect(serialized).not.toContain("~raw-sensitive-ship");
-      expect(serialized).not.toContain("raw-sensitive-ship");
     });
 
     it("uses the ingress command gate for owner-only command authorization", async () => {

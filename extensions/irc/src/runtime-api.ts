@@ -24,7 +24,7 @@ export {
 } from "openclaw/plugin-sdk/channel-status";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-export { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+export { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {

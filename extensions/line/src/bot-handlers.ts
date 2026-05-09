@@ -1,12 +1,9 @@
 import type { webhook } from "@line/bot-sdk";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  resolveInboundMentionDecision,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   readChannelAllowFromStore,
   resolvePairingIdLabel,
@@ -22,8 +19,13 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveLineIngressAccess, type ResolvedLineIngressAccess } from "./access-policy.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,
@@ -75,6 +77,10 @@ export interface LineHandlerContext {
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
 export type LineWebhookReplayCache = ClaimableDedupe;
+
+function normalizeLineIngressEntry(value: string): string | null {
+  return normalizeLineAllowEntry(value) || null;
+}
 
 export class LineRetryableWebhookError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -223,28 +229,102 @@ async function sendLinePairingReply(params: {
 async function shouldProcessLineEvent(
   event: MessageEvent | PostbackEvent,
   context: LineHandlerContext,
-): Promise<ResolvedLineIngressAccess | null> {
+) {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
   const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
   const rawText = resolveEventRawText(event);
-  const access = await resolveLineIngressAccess({
-    cfg,
+  const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.line !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
+    });
+  const groupPolicy: GroupPolicy =
+    runtimeGroupPolicy === "disabled"
+      ? "disabled"
+      : groupConfig?.allowFrom !== undefined
+        ? "allowlist"
+        : runtimeGroupPolicy;
+  const groupAllowFrom = normalizeStringEntries(
+    firstDefined(
+      groupConfig?.allowFrom,
+      account.config.groupAllowFrom,
+      account.config.allowFrom?.length ? account.config.allowFrom : undefined,
+    ),
+  );
+  const mentionFacts = (() => {
+    if (!isGroup || event.type !== "message") {
+      return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
+    }
+    const peerId = groupId ?? roomId ?? userId ?? "unknown";
+    const { agentId } = resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      peer: { kind: "group", id: peerId },
+    });
+    const mentionRegexes = buildMentionRegexes(cfg, agentId);
+    const wasMentionedByNative = isLineBotMentioned(event.message);
+    const wasMentionedByPattern =
+      event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
+    return {
+      canDetectMention: event.message.type === "text",
+      wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      hasAnyMention: hasAnyLineMention(event.message),
+    };
+  })();
+  const access = await resolveStableChannelMessageIngress({
+    channelId: "line",
     accountId: account.accountId,
-    accountConfig: account.config,
-    providerConfigPresent: cfg.channels?.line !== undefined,
-    isGroup,
-    conversationId: (groupId ?? roomId ?? senderId) || "unknown",
-    senderId,
-    hasControlCommand: hasControlCommand(rawText, cfg),
-    eventKind: event.type === "postback" ? "postback" : "message",
-    groupConfig,
-    readAllowFromStore: async () =>
+    identity: {
+      key: "line-user-id",
+      normalize: normalizeLineIngressEntry,
+      sensitivity: "pii",
+      entryIdPrefix: "line-entry",
+    },
+    cfg,
+    readStoreAllowFrom: async () =>
       await readChannelAllowFromStore("line", undefined, account.accountId),
+    subject: { stableId: senderId },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: (groupId ?? roomId ?? senderId) || "unknown",
+    },
+    ...(isGroup && groupConfig?.enabled === false
+      ? { route: { id: "line:group-config", enabled: false } }
+      : {}),
+    mentionFacts:
+      isGroup && event.type === "message"
+        ? {
+            canDetectMention: mentionFacts.canDetectMention,
+            wasMentioned: mentionFacts.wasMentioned,
+            hasAnyMention: mentionFacts.hasAnyMention,
+            implicitMentionKinds: [],
+          }
+        : undefined,
+    event: { kind: event.type === "postback" ? "postback" : "message" },
+    dmPolicy,
+    groupPolicy,
+    policy: {
+      groupAllowFromFallbackToAllowFrom: false,
+      activation: {
+        requireMention: isGroup && event.type === "message" && requireMention,
+        allowTextCommands: true,
+      },
+    },
+    allowFrom: normalizeStringEntries(account.config.allowFrom),
+    groupAllowFrom,
+    command: {
+      hasControlCommand: shouldComputeCommandAuthorized(rawText, cfg),
+      groupOwnerAllowFrom: "none",
+    },
   });
   warnMissingProviderGroupPolicyFallbackOnce({
-    providerMissingFallbackApplied: access.providerMissingFallbackApplied,
+    providerMissingFallbackApplied,
     providerKey: "line",
     accountId: account.accountId,
     log: (message) => logVerbose(message),
@@ -264,16 +344,16 @@ async function shouldProcessLineEvent(
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
         return null;
       }
-      if (access.senderAccess.ingressReasonCode !== "group_policy_allowed") {
+      if (access.senderAccess.reasonCode !== "group_policy_allowed") {
         logVerbose(`Blocked line group sender ${senderId} (group allowFrom override)`);
         return null;
       }
     }
-    if (access.senderAccess.ingressReasonCode === "group_policy_disabled") {
+    if (access.senderAccess.reasonCode === "group_policy_disabled") {
       logVerbose("Blocked line group message (groupPolicy: disabled)");
-    } else if (!senderId && access.groupPolicy === "allowlist") {
+    } else if (!senderId && groupPolicy === "allowlist") {
       logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
-    } else if (access.senderAccess.ingressReasonCode === "group_policy_empty_allowlist") {
+    } else if (access.senderAccess.reasonCode === "group_policy_empty_allowlist") {
       logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
     } else {
       logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
@@ -281,7 +361,7 @@ async function shouldProcessLineEvent(
     return null;
   }
 
-  if (access.senderAccess.ingressReasonCode === "dm_policy_disabled") {
+  if (access.senderAccess.reasonCode === "dm_policy_disabled") {
     logVerbose("Blocked line sender (dmPolicy: disabled)");
     return null;
   }
@@ -353,56 +433,25 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
-  if (isGroup) {
-    const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
-    const requireMention = groupConfig?.requireMention !== false;
+  if (isGroup && decision.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? message.text : "";
     const sourceInfo = getLineSourceInfo(event.source);
-    const peerId = groupId ?? roomId ?? sourceInfo.userId ?? "unknown";
-    const { agentId } = resolveAgentRoute({
-      cfg,
-      channel: "line",
-      accountId: account.accountId,
-      peer: { kind: "group", id: peerId },
-    });
-    const mentionRegexes = buildMentionRegexes(cfg, agentId);
-    const wasMentionedByNative = isLineBotMentioned(message);
-    const wasMentionedByPattern =
-      message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
-    const wasMentioned = wasMentionedByNative || wasMentionedByPattern;
-    const mentionDecision = resolveInboundMentionDecision({
-      facts: {
-        canDetectMention: message.type === "text",
-        wasMentioned,
-        hasAnyMention: hasAnyLineMention(message),
-        implicitMentionKinds: [],
-      },
-      policy: {
-        isGroup: true,
-        requireMention,
-        allowTextCommands: true,
-        hasControlCommand: hasControlCommand(rawText, cfg),
-        commandAuthorized: decision.commandAccess.authorized,
-      },
-    });
-    if (mentionDecision.shouldSkip) {
-      logVerbose(`line: skipping group message (requireMention, not mentioned)`);
-      const historyKey = groupId ?? roomId;
-      const senderId = sourceInfo.userId ?? "unknown";
-      if (historyKey && context.groupHistories) {
-        recordPendingHistoryEntryIfEnabled({
-          historyMap: context.groupHistories,
-          historyKey,
-          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-          entry: {
-            sender: `user:${senderId}`,
-            body: rawText || `<${message.type}>`,
-            timestamp: event.timestamp,
-          },
-        });
-      }
-      return;
+    logVerbose(`line: skipping group message (requireMention, not mentioned)`);
+    const historyKey = groupId ?? roomId;
+    const senderId = sourceInfo.userId ?? "unknown";
+    if (historyKey && context.groupHistories) {
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: context.groupHistories,
+        historyKey,
+        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        entry: {
+          sender: `user:${senderId}`,
+          body: rawText || `<${message.type}>`,
+          timestamp: event.timestamp,
+        },
+      });
     }
+    return;
   }
 
   const allMedia: MediaRef[] = [];

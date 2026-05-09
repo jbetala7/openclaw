@@ -1,58 +1,31 @@
-export { decideChannelIngress, decideChannelIngressBundle } from "./decision.js";
+export { decideChannelIngress } from "./decision.js";
+export { defineStableChannelIngressIdentity } from "./runtime-identity.js";
 export {
-  CHANNEL_INGRESS_GATE_SELECTORS,
-  findChannelIngressCommandGate,
-  findChannelIngressGate,
-  findChannelIngressSenderGate,
-} from "./gates.js";
-export type { ChannelIngressDecisionBundle } from "./decision.js";
-export type { ChannelIngressGateSelector } from "./gates.js";
-export {
-  mapChannelIngressDecisionToTurnAdmission,
-  projectIngressAccessFacts,
-} from "./projection.js";
-export {
-  createChannelIngressPluginId,
-  defineChannelIngressIdentity,
-  defineStableChannelIngressIdentity,
-} from "./runtime-identity.js";
-export {
-  findChannelIngressSenderReasonCode,
-  formatChannelIngressPolicyReason,
-  mapChannelIngressReasonCodeToDmGroupAccessReason,
-  projectChannelIngressDmGroupAccess,
-  projectChannelIngressSenderGroupAccess,
-} from "./runtime-projection.js";
-export {
-  nestedRouteAllowlistFact,
-  routeAllowlistFact,
-  routeDenyWhenSenderEmptyFact,
-  routeDisabledFact,
-  routeSenderAllowlistFact,
-} from "./runtime-route-facts.js";
-export {
+  channelIngressRoutes,
+  createChannelIngressResolver,
   readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelIngressEffectiveAllowFromLists,
-  resolveChannelMessageIngressBundle,
   resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
 } from "./runtime.js";
 export { resolveChannelIngressState } from "./state.js";
 export type {
-  ChannelIngressAdapterEntry,
   ChannelIngressAccessGroupMembershipResolver,
-  ChannelIngressDmGroupAccessProjection,
+  ChannelIngressCommandPresetInput,
+  ChannelIngressConfigInput,
+  ChannelIngressEventPresetInput,
   ChannelIngressIdentityAlias,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
-  ChannelIngressSubject,
-  ChannelIngressSubjectIdentifier,
-  ChannelIngressSenderGroupAccessProjection,
+  ChannelIngressRouteAccess,
+  ChannelIngressRouteDescriptor,
+  ChannelIngressResolver,
+  ChannelIngressResolverMessageParams,
   ChannelMessageIngressCommandInput,
+  CreateChannelIngressResolverParams,
   ResolvedChannelMessageIngress,
-  ResolvedChannelMessageIngressBundle,
-  ResolveChannelMessageIngressBundleParams,
   ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
 export type * from "./types.js";

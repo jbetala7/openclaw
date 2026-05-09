@@ -2,21 +2,12 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-  type ResolvedChannelMessageIngress,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
-
-const synologyChatIngressIdentity = defineStableChannelIngressIdentity({
-  key: "sender-id",
-  entryIdPrefix: "synology-chat-entry",
-});
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -34,25 +25,21 @@ export async function authorizeUserForDmWithIngress(params: {
   userId: string;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
-}): Promise<ResolvedChannelMessageIngress> {
-  return await resolveChannelMessageIngress({
+}) {
+  return await resolveStableChannelMessageIngress({
     channelId: "synology-chat",
     accountId: params.accountId,
-    identity: synologyChatIngressIdentity,
+    identity: {
+      key: "sender-id",
+      entryIdPrefix: "synology-chat-entry",
+    },
     subject: { stableId: params.userId },
     conversation: {
       kind: "direct",
       id: "direct",
     },
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: false,
-    },
-    policy: {
-      dmPolicy: params.dmPolicy,
-      groupPolicy: "disabled",
-    },
+    event: { mayPair: false },
+    dmPolicy: params.dmPolicy,
     allowFrom: params.allowedUserIds,
   });
 }

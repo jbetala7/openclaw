@@ -32,23 +32,13 @@ function mergeMatches(matches: readonly RedactedIngressMatch[]): RedactedIngress
 function mergeDiagnostics(
   ...groups: Array<readonly RedactedIngressEntryDiagnostic[] | undefined>
 ): RedactedIngressEntryDiagnostic[] {
-  const merged: RedactedIngressEntryDiagnostic[] = [];
-  for (const group of groups) {
-    if (group) {
-      merged.push(...group);
-    }
-  }
-  return merged;
+  return groups.flatMap((group) => [...(group ?? [])]);
 }
 
 function accessGroupFactByName(
   facts: readonly AccessGroupMembershipFact[] | undefined,
 ): Map<string, AccessGroupMembershipFact> {
-  const byName = new Map<string, AccessGroupMembershipFact>();
-  for (const fact of facts ?? []) {
-    byName.set(fact.groupName, fact);
-  }
-  return byName;
+  return new Map((facts ?? []).map((fact) => [fact.groupName, fact] as const));
 }
 
 async function normalizeAndMatch(params: {
@@ -120,16 +110,6 @@ function groupSenderEntries(params: {
   ]);
 }
 
-function subjectHasExactIdentifier(params: {
-  subject: InternalChannelIngressSubject;
-  identifier: InternalChannelIngressSubject["identifiers"][number];
-}): boolean {
-  return params.subject.identifiers.some(
-    (current) =>
-      current.kind === params.identifier.kind && current.value === params.identifier.value,
-  );
-}
-
 function eventSubjectMatchContext(input: ChannelIngressStateInput): "dm" | "group" {
   return input.conversation.kind === "direct" ? "dm" : "group";
 }
@@ -172,10 +152,9 @@ async function originSubjectMatched(input: ChannelIngressStateInput): Promise<bo
   }
   if (
     origin.identifiers.some((identifier) =>
-      subjectHasExactIdentifier({
-        subject: input.subject,
-        identifier,
-      }),
+      input.subject.identifiers.some(
+        (current) => current.kind === identifier.kind && current.value === identifier.value,
+      ),
     )
   ) {
     return true;
@@ -326,14 +305,6 @@ async function resolveIngressAllowlist(params: {
   };
 }
 
-function dmEntries(input: ChannelIngressStateInput): Array<string | number> {
-  return input.allowlists.dm ?? [];
-}
-
-function groupEntries(input: ChannelIngressStateInput): Array<string | number> {
-  return input.allowlists.group ?? [];
-}
-
 async function resolveRouteFacts(
   input: ChannelIngressStateInput,
 ): Promise<ResolvedRouteGateFacts[]> {
@@ -375,13 +346,13 @@ export async function resolveChannelIngressState(
 ): Promise<ChannelIngressState> {
   const [dm, pairingStore, group, commandOwner, commandGroup, routeFacts, eventOriginMatched] =
     await Promise.all([
-      resolveIngressAllowlist({ input, rawEntries: dmEntries(input), context: "dm" }),
+      resolveIngressAllowlist({ input, rawEntries: input.allowlists.dm, context: "dm" }),
       resolveIngressAllowlist({
         input,
         rawEntries: input.allowlists.pairingStore,
         context: "dm",
       }),
-      resolveIngressAllowlist({ input, rawEntries: groupEntries(input), context: "group" }),
+      resolveIngressAllowlist({ input, rawEntries: input.allowlists.group, context: "group" }),
       resolveIngressAllowlist({
         input,
         rawEntries: input.allowlists.commandOwner,
@@ -417,10 +388,3 @@ export async function resolveChannelIngressState(
     },
   };
 }
-
-export const TEST_ONLY = {
-  accessGroupFactByName,
-  directAllowlistEntries,
-  referencedAccessGroups,
-  redactedEntries,
-};

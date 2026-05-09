@@ -7,31 +7,17 @@ import type {
   ChannelIngressSubject,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { ChannelIngressPluginId, InternalMatchMaterial } from "./types.js";
+import type { InternalMatchMaterial } from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
-
-export function createChannelIngressPluginId(id: string): ChannelIngressPluginId {
-  const trimmed = id.trim();
-  if (!trimmed) {
-    throw new Error("Channel ingress plugin id must be non-empty.");
-  }
-  return trimmed as ChannelIngressPluginId;
-}
-
-export function defineChannelIngressIdentity(
-  identity: ChannelIngressIdentityDescriptor,
-): ChannelIngressIdentityDescriptor {
-  return identity;
-}
 
 export function defineStableChannelIngressIdentity(
   params: StableChannelIngressIdentityParams = {},
 ): ChannelIngressIdentityDescriptor {
   const { entryIdPrefix, resolveEntryId, aliases, isWildcardEntry, matchEntry, ...primary } =
     params;
-  return defineChannelIngressIdentity({
+  return {
     primary,
     aliases,
     isWildcardEntry,
@@ -39,11 +25,7 @@ export function defineStableChannelIngressIdentity(
     resolveEntryId:
       resolveEntryId ??
       (entryIdPrefix ? ({ entryIndex }) => `${entryIdPrefix}-${entryIndex + 1}` : undefined),
-  });
-}
-
-export function toChannelId(id: string | ChannelIngressPluginId): ChannelIngressPluginId {
-  return createChannelIngressPluginId(id);
+  };
 }
 
 function defaultNormalize(value: string): string {
@@ -88,6 +70,30 @@ function identityMatchKey(entry: Pick<ChannelIngressAdapterEntry, "kind" | "valu
   return `${entry.kind}:${entry.value}`;
 }
 
+function adapterEntry(params: {
+  identity: ChannelIngressIdentityDescriptor;
+  field: ResolvedIdentityField;
+  fieldIndex: number;
+  entry: string;
+  entryIndex: number;
+  value: string;
+  fallbackSuffix?: string;
+}): ChannelIngressAdapterEntry {
+  return {
+    opaqueEntryId:
+      params.identity.resolveEntryId?.({
+        entry: params.entry,
+        entryIndex: params.entryIndex,
+        fieldKey: params.field.key,
+        fieldIndex: params.fieldIndex,
+      }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
+    kind: params.field.kind,
+    value: params.value,
+    dangerous: fieldDangerous(params.field, params.entry),
+    sensitivity: params.field.sensitivity,
+  };
+}
+
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
 ): ChannelIngressAdapter {
@@ -97,21 +103,16 @@ export function createIdentityAdapter(
     normalizeEntries({ entries }) {
       const matchable = entries.flatMap((entry, entryIndex) => {
         if (isWildcardEntry(entry)) {
-          const primary = fields[0];
           return [
-            {
-              opaqueEntryId:
-                identity.resolveEntryId?.({
-                  entry,
-                  entryIndex,
-                  fieldKey: primary.key,
-                  fieldIndex: 0,
-                }) ?? `entry-${entryIndex + 1}:wildcard`,
-              kind: primary.kind,
+            adapterEntry({
+              identity,
+              field: fields[0],
+              fieldIndex: 0,
+              entry,
+              entryIndex,
               value: "*",
-              dangerous: fieldDangerous(primary, entry),
-              sensitivity: primary.sensitivity,
-            },
+              fallbackSuffix: "wildcard",
+            }),
           ];
         }
         return fields.flatMap((field, fieldIndex) => {
@@ -119,21 +120,7 @@ export function createIdentityAdapter(
           if (!value) {
             return [];
           }
-          return [
-            {
-              opaqueEntryId:
-                identity.resolveEntryId?.({
-                  entry,
-                  entryIndex,
-                  fieldKey: field.key,
-                  fieldIndex,
-                }) ?? `entry-${entryIndex + 1}:${field.key}`,
-              kind: field.kind,
-              value,
-              dangerous: fieldDangerous(field, entry),
-              sensitivity: field.sensitivity,
-            },
-          ];
+          return [adapterEntry({ identity, field, fieldIndex, entry, entryIndex, value })];
         });
       });
       return {
@@ -172,29 +159,21 @@ export function createIdentitySubject(
   input: ChannelIngressIdentitySubjectInput,
 ): ChannelIngressSubject {
   const fields = identityFields(identity);
-  const identifiers: InternalMatchMaterial[] = [];
-  const primary = fields[0];
-  if (input.stableId != null) {
-    identifiers.push({
-      opaqueId: primary.key,
-      kind: primary.kind,
-      value: String(input.stableId),
-      dangerous: fieldDangerous(primary, String(input.stableId)),
-      sensitivity: primary.sensitivity,
-    });
-  }
-  for (const field of fields.slice(1)) {
-    const value = input.aliases?.[field.key];
-    if (value == null) {
-      continue;
+  const identifiers: InternalMatchMaterial[] = fields.flatMap((field, index) => {
+    const rawValue = index === 0 ? input.stableId : input.aliases?.[field.key];
+    if (rawValue == null) {
+      return [];
     }
-    identifiers.push({
-      opaqueId: field.key,
-      kind: field.kind,
-      value: String(value),
-      dangerous: fieldDangerous(field, String(value)),
-      sensitivity: field.sensitivity,
-    });
-  }
+    const value = String(rawValue);
+    return [
+      {
+        opaqueId: field.key,
+        kind: field.kind,
+        value,
+        dangerous: fieldDangerous(field, value),
+        sensitivity: field.sensitivity,
+      },
+    ];
+  });
   return { identifiers };
 }

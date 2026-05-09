@@ -11,76 +11,6 @@ type PostbackEvent = webhook.PostbackEvent;
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   buildMentionRegexes: () => [],
   matchesMentionPatterns: () => false,
-  resolveInboundMentionDecision: (params: {
-    facts?: {
-      canDetectMention: boolean;
-      wasMentioned: boolean;
-      hasAnyMention?: boolean;
-    };
-    policy?: {
-      isGroup: boolean;
-      requireMention: boolean;
-      allowTextCommands: boolean;
-      hasControlCommand: boolean;
-      commandAuthorized: boolean;
-    };
-    isGroup?: boolean;
-    requireMention?: boolean;
-    canDetectMention?: boolean;
-    wasMentioned?: boolean;
-    hasAnyMention?: boolean;
-    allowTextCommands?: boolean;
-    hasControlCommand?: boolean;
-    commandAuthorized?: boolean;
-  }) => {
-    const facts =
-      "facts" in params && params.facts
-        ? params.facts
-        : {
-            canDetectMention: Boolean(params.canDetectMention),
-            wasMentioned: Boolean(params.wasMentioned),
-            hasAnyMention: params.hasAnyMention,
-          };
-    const policy =
-      "policy" in params && params.policy
-        ? params.policy
-        : {
-            isGroup: Boolean(params.isGroup),
-            requireMention: Boolean(params.requireMention),
-            allowTextCommands: Boolean(params.allowTextCommands),
-            hasControlCommand: Boolean(params.hasControlCommand),
-            commandAuthorized: Boolean(params.commandAuthorized),
-          };
-    return {
-      effectiveWasMentioned:
-        facts.wasMentioned ||
-        (policy.allowTextCommands &&
-          policy.hasControlCommand &&
-          policy.commandAuthorized &&
-          !facts.hasAnyMention),
-      shouldSkip:
-        policy.isGroup &&
-        policy.requireMention &&
-        facts.canDetectMention &&
-        !facts.wasMentioned &&
-        !(
-          policy.allowTextCommands &&
-          policy.hasControlCommand &&
-          policy.commandAuthorized &&
-          !facts.hasAnyMention
-        ),
-      shouldBypassMention:
-        policy.isGroup &&
-        policy.requireMention &&
-        !facts.wasMentioned &&
-        !facts.hasAnyMention &&
-        policy.allowTextCommands &&
-        policy.hasControlCommand &&
-        policy.commandAuthorized,
-      implicitMention: false,
-      matchedImplicitMentionKinds: [],
-    };
-  },
 }));
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer:
@@ -121,36 +51,6 @@ vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (text: string) => text,
   logVerbose: () => {},
-}));
-vi.mock("openclaw/plugin-sdk/group-access", () => ({
-  evaluateMatchedGroupAccessForPolicy: ({
-    groupPolicy,
-    hasMatchInput,
-    allowlistConfigured,
-    allowlistMatched,
-  }: {
-    groupPolicy: string;
-    hasMatchInput: boolean;
-    allowlistConfigured: boolean;
-    allowlistMatched: boolean;
-  }) => {
-    if (groupPolicy === "disabled") {
-      return { allowed: false, reason: "disabled" };
-    }
-    if (groupPolicy !== "allowlist") {
-      return { allowed: true, reason: null };
-    }
-    if (!hasMatchInput) {
-      return { allowed: false, reason: "missing_match_input" };
-    }
-    if (!allowlistConfigured) {
-      return { allowed: false, reason: "empty_allowlist" };
-    }
-    if (!allowlistMatched) {
-      return { allowed: false, reason: "not_allowlisted" };
-    }
-    return { allowed: true, reason: null };
-  },
 }));
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 20,
@@ -387,7 +287,6 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("openclaw/plugin-sdk/command-auth");
     vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/group-access");
     vi.doUnmock("openclaw/plugin-sdk/reply-history");
     vi.doUnmock("openclaw/plugin-sdk/routing");
     vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");

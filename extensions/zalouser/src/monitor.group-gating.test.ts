@@ -95,9 +95,7 @@ function installRuntime(params: {
   const readSessionUpdatedAt = vi.fn(
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
   );
-  type ResolvedTurn = Awaited<
-    ReturnType<Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]["adapter"]["resolveTurn"]>
-  >;
+  type ResolvedTurn = Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0];
   const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
     await turn.recordInboundSession({
       storePath: turn.storePath,
@@ -149,21 +147,6 @@ function installRuntime(params: {
       routeSessionKey: turn.routeSessionKey,
       dispatchResult,
     };
-  });
-  const runTurn = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
-    const input = await params.adapter.ingest(params.raw);
-    if (!input) {
-      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-    }
-    const resolved = await params.adapter.resolveTurn(
-      input,
-      {
-        kind: "message",
-        canStartAgentTurn: true,
-      },
-      {},
-    );
-    return await dispatchAssembled(resolved);
   });
   const buildContext = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
@@ -270,7 +253,8 @@ function installRuntime(params: {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       turn: {
-        run: runTurn as unknown as PluginRuntime["channel"]["turn"]["run"],
+        runAssembled:
+          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
       },
       text: {

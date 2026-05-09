@@ -2,13 +2,7 @@ import type { AccessGroupConfig } from "../../config/types.access-groups.js";
 import type { ChatChannelId } from "../ids.js";
 import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention-gating.js";
 
-declare const CHANNEL_INGRESS_PLUGIN_ID: unique symbol;
-
-export type ChannelIngressPluginId = string & {
-  readonly [CHANNEL_INGRESS_PLUGIN_ID]: true;
-};
-
-export type ChannelIngressChannelId = ChatChannelId | ChannelIngressPluginId;
+export type ChannelIngressChannelId = ChatChannelId | string;
 
 export type ChannelIngressIdentifierKind =
   | "stable-id"
@@ -213,6 +207,8 @@ export type ChannelIngressPolicyInput = {
   activation?: {
     requireMention: boolean;
     allowTextCommands: boolean;
+    allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
+    order?: "before-sender" | "after-command";
   };
   command?: {
     useAccessGroups?: boolean;
@@ -297,12 +293,15 @@ export type AccessGraphGate = {
     hasMentionFacts: boolean;
     requireMention: boolean;
     allowTextCommands: boolean;
+    allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
+    order?: "before-sender" | "after-command";
     shouldSkip: boolean;
     canDetectMention?: boolean;
     wasMentioned?: boolean;
     hasAnyMention?: boolean;
     implicitMentionKinds?: readonly InboundImplicitMentionKind[];
     effectiveWasMentioned?: boolean;
+    shouldBypassMention?: boolean;
   };
 };
 
@@ -328,25 +327,10 @@ export type ChannelIngressState = {
 
 export type ChannelIngressAdmission = "dispatch" | "observe" | "skip" | "drop" | "pairing-required";
 
-export type RedactedIngressDiagnostics = {
-  decisiveGateId?: string;
-  reasonCode: IngressReasonCode;
-};
-
 export type ChannelIngressDecision = {
   admission: ChannelIngressAdmission;
   decision: "allow" | "block" | "pairing";
   decisiveGateId: string;
   reasonCode: IngressReasonCode;
   graph: AccessGraph;
-  diagnostics: RedactedIngressDiagnostics;
 };
-
-export type ChannelIngressSideEffectResult =
-  | { kind: "none" }
-  | { kind: "pairing-reply-sent" }
-  | { kind: "pairing-reply-failed"; errorCode?: string }
-  | { kind: "command-reply-sent" }
-  | { kind: "command-reply-failed"; errorCode?: string }
-  | { kind: "pending-history-recorded" }
-  | { kind: "local-event-handled" };

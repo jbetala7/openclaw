@@ -43,7 +43,6 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
-import { createSignalMonitorTaskRunner } from "./monitor/task-runner.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -72,6 +71,24 @@ export type MonitorSignalOpts = {
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
+}
+
+function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
+  const inFlight = new Set<Promise<void>>();
+  return {
+    runEventTask(task: () => Promise<void>): void {
+      const trackedTask = Promise.resolve()
+        .then(task)
+        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .finally(() => inFlight.delete(trackedTask));
+      inFlight.add(trackedTask);
+    },
+    async waitForIdle(): Promise<void> {
+      while (inFlight.size > 0) {
+        await Promise.allSettled(Array.from(inFlight));
+      }
+    },
+  };
 }
 
 function mergeAbortSignals(

@@ -38,7 +38,7 @@ describe("qqbot: prefix normalization for inbound commandAuthorized", () => {
       senderId,
       allowFrom: rawAllowFrom,
     });
-    return result.commandAuthorized === true;
+    return result.commandAccess.authorized === true;
   }
 
   it("authorizes when allowFrom uses qqbot: prefix and senderId is the bare id", async () => {

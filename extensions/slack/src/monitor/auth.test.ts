@@ -54,8 +54,6 @@ function makeAuthorizeCtx(params?: {
 }
 
 describe("resolveSlackEffectiveAllowFrom", () => {
-  const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
-
   beforeAll(async () => {
     ({
       authorizeSlackSystemEventSender,
@@ -67,52 +65,45 @@ describe("resolveSlackEffectiveAllowFrom", () => {
   beforeEach(() => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
     clearSlackAllowFromCacheForTest();
-    if (prevTtl === undefined) {
-      delete process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
-    } else {
-      process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = prevTtl;
-    }
   });
 
   it("falls back to channel config allowFrom when pairing store throws", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockRejectedValueOnce(new Error("boom"));
 
-    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]));
+    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]), {
+      includePairingStore: true,
+    });
 
-    expect(effective.allowFrom).toEqual(["u1"]);
-    expect(effective.allowFromLower).toEqual(["u1"]);
+    expect(effective).toEqual(["u1"]);
   });
 
   it("treats malformed non-array pairing-store responses as empty", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockReturnValueOnce(undefined);
 
-    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]));
+    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]), {
+      includePairingStore: true,
+    });
 
-    expect(effective.allowFrom).toEqual(["u1"]);
-    expect(effective.allowFromLower).toEqual(["u1"]);
+    expect(effective).toEqual(["u1"]);
   });
 
-  it("memoizes pairing-store allowFrom reads within TTL", async () => {
+  it("reads pairing-store allowFrom when requested", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
     const ctx = makeSlackCtx(["u1"]);
 
-    const first = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
-    const second = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+    const effective = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
 
-    expect(first.allowFrom).toEqual(["u1", "u2"]);
-    expect(second.allowFrom).toEqual(["u1", "u2"]);
+    expect(effective).toEqual(["u1", "u2"]);
     expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes pairing-store allowFrom when cache TTL is zero", async () => {
-    process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = "0";
+  it("does not read pairing-store allowFrom unless requested", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
-    const ctx = makeSlackCtx(["u1"]);
 
-    await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
-    await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]));
 
-    expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(2);
+    expect(effective).toEqual(["u1"]);
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
   });
 });
 

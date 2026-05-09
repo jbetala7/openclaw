@@ -5,7 +5,7 @@ import {
 } from "./access-state.js";
 
 describe("resolveMatrixMonitorAccessState", () => {
-  it("normalizes group allowlists and exposes reusable matches", async () => {
+  it("normalizes group allowlists and uses shared ingress matching", async () => {
     const state = await resolveMatrixMonitorAccessState({
       allowFrom: ["matrix:@Alice:Example.org"],
       storeAllowFrom: ["user:@bob:example.org"],
@@ -18,9 +18,6 @@ describe("resolveMatrixMonitorAccessState", () => {
 
     expect(state.effectiveGroupAllowFrom).toEqual(["@carol:example.org"]);
     expect(state.effectiveRoomUsers).toEqual(["user:@dana:example.org"]);
-    expect(state.directAllowMatch.allowed).toBe(false);
-    expect(state.roomUserMatch?.allowed).toBe(true);
-    expect(state.groupAllowMatch?.allowed).toBe(false);
     expect(state.messageIngress.ingress.decision).toBe("allow");
   });
 
@@ -34,7 +31,6 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(state.directAllowMatch.allowed).toBe(true);
     expect(
       await resolveMatrixMonitorCommandAccess(state, {
         useAccessGroups: true,
@@ -59,7 +55,7 @@ describe("resolveMatrixMonitorAccessState", () => {
     });
 
     expect(state.messageIngress.senderAccess.effectiveAllowFrom).toEqual([]);
-    expect(state.directAllowMatch.allowed).toBe(false);
+    expect(state.messageIngress.senderAccess.decision).toBe("block");
     expect(state.messageIngress.ingress.reasonCode).toBe("dm_policy_not_allowlisted");
   });
 
@@ -73,7 +69,6 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(state.directAllowMatch.allowed).toBe(true);
     expect(
       await resolveMatrixMonitorCommandAccess(state, {
         useAccessGroups: true,
@@ -130,7 +125,7 @@ describe("resolveMatrixMonitorAccessState", () => {
     });
   });
 
-  it("keeps room-user matching disabled for dm traffic", async () => {
+  it("keeps room-user allowlists out of dm traffic", async () => {
     const state = await resolveMatrixMonitorAccessState({
       allowFrom: [],
       storeAllowFrom: [],
@@ -140,7 +135,7 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: false,
     });
 
-    expect(state.roomUserMatch).toBeNull();
+    expect(state.messageIngress.senderAccess.decision).toBe("pairing");
     expect(
       await resolveMatrixMonitorCommandAccess(state, {
         useAccessGroups: true,

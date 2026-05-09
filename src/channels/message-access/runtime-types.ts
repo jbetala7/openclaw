@@ -1,6 +1,4 @@
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
-import type { AccessFacts } from "../turn/types.js";
-import type { DmGroupAccessDecision, DmGroupAccessReasonCode } from "./legacy-policy.js";
 import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
@@ -66,6 +64,11 @@ export type ChannelIngressIdentitySubjectInput = {
   aliases?: Record<string, string | number | null | undefined>;
 };
 
+export type ChannelIngressConfigInput = {
+  accessGroups?: ChannelIngressStateInput["accessGroups"];
+  commands?: { useAccessGroups?: boolean } | null;
+} | null;
+
 export type ChannelMessageIngressCommandInput = NonNullable<
   ChannelIngressPolicyInput["command"]
 > & {
@@ -73,6 +76,34 @@ export type ChannelMessageIngressCommandInput = NonNullable<
   groupOwnerAllowFrom?: "configured" | "none";
   directGroupAllowFrom?: "effective" | "none";
   commandGroupAllowFromFallbackToAllowFrom?: boolean;
+};
+
+export type ChannelIngressCommandPresetInput = Omit<
+  Partial<ChannelMessageIngressCommandInput>,
+  "useAccessGroups"
+> & {
+  requested?: boolean;
+  useAccessGroups?: boolean | null;
+  cfg?: ChannelIngressConfigInput;
+};
+
+export type ChannelIngressEventPresetInput = Partial<ChannelIngressEventInput> & {
+  isGroup?: boolean;
+};
+
+export type ChannelIngressRouteDescriptor = {
+  id: string;
+  kind?: RouteGateFacts["kind"];
+  configured?: boolean;
+  matched?: boolean;
+  allowed?: boolean;
+  enabled?: boolean;
+  precedence?: number;
+  senderPolicy?: RouteGateFacts["senderPolicy"];
+  senderAllowFrom?: Array<string | number> | null;
+  senderAllowFromSource?: RouteGateFacts["senderAllowFromSource"];
+  matchId?: string;
+  blockReason?: string;
 };
 
 export type ChannelIngressAccessGroupMembershipResolver = (params: {
@@ -93,6 +124,7 @@ export type ResolveChannelMessageIngressParams = {
   policy: ChannelIngressPolicyInput;
   allowFrom?: Array<string | number> | null;
   groupAllowFrom?: Array<string | number> | null;
+  route?: ChannelIngressRouteDescriptor | readonly ChannelIngressRouteDescriptor[];
   routeFacts?: RouteGateFacts[];
   accessGroups?: ChannelIngressStateInput["accessGroups"];
   accessGroupMembership?: readonly AccessGroupMembershipFact[];
@@ -109,26 +141,67 @@ export type ResolveChannelMessageIngressParams = {
   command?: ChannelMessageIngressCommandInput;
 };
 
-export type ChannelIngressDmGroupAccessProjection = {
-  decision: DmGroupAccessDecision;
-  reasonCode: DmGroupAccessReasonCode;
-  reason: string;
+export type CreateChannelIngressResolverParams = Pick<
+  ResolveChannelMessageIngressParams,
+  | "channelId"
+  | "accountId"
+  | "identity"
+  | "accessGroups"
+  | "accessGroupMembership"
+  | "resolveAccessGroupMembership"
+  | "accessGroupMatchedAllowFromEntry"
+  | "readStoreAllowFrom"
+  | "useDefaultPairingStore"
+> & {
+  cfg?: ChannelIngressConfigInput;
+  useAccessGroups?: boolean | null;
+  defaultDmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
+  defaultGroupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
+  groupAllowFromFallbackToAllowFrom?: boolean;
+  mutableIdentifierMatching?: ChannelIngressPolicyInput["mutableIdentifierMatching"];
 };
 
-export type ChannelIngressSenderGroupAccessProjection = {
-  allowed: boolean;
-  groupPolicy: ChannelIngressPolicyInput["groupPolicy"];
-  providerMissingFallbackApplied: boolean;
-  reason: "allowed" | "disabled" | "empty_allowlist" | "sender_not_allowlisted";
+export type ChannelIngressResolverMessageParams = Omit<
+  ResolveChannelMessageIngressParams,
+  | "channelId"
+  | "accountId"
+  | "identity"
+  | "accessGroups"
+  | "resolveAccessGroupMembership"
+  | "accessGroupMatchedAllowFromEntry"
+  | "readStoreAllowFrom"
+  | "useDefaultPairingStore"
+  | "event"
+  | "policy"
+  | "command"
+> & {
+  event?: ChannelIngressEventInput | ChannelIngressEventPresetInput;
+  dmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
+  groupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
+  policy?: Partial<Omit<ChannelIngressPolicyInput, "dmPolicy" | "groupPolicy">>;
+  command?: ChannelMessageIngressCommandInput | ChannelIngressCommandPresetInput | false;
 };
 
-export type ChannelIngressSenderAccess = ChannelIngressDmGroupAccessProjection & {
+export type ChannelIngressResolver = {
+  message(params: ChannelIngressResolverMessageParams): Promise<ResolvedChannelMessageIngress>;
+  command(params: ChannelIngressResolverMessageParams): Promise<ResolvedChannelMessageIngress>;
+  event(params: ChannelIngressResolverMessageParams): Promise<ResolvedChannelMessageIngress>;
+};
+
+export type ResolveStableChannelMessageIngressParams = Omit<
+  CreateChannelIngressResolverParams,
+  "identity"
+> &
+  ChannelIngressResolverMessageParams & { identity?: StableChannelIngressIdentityParams };
+
+export type ChannelIngressSenderAccess = {
   allowed: boolean;
-  ingressReasonCode: IngressReasonCode;
+  decision: ChannelIngressDecision["decision"];
+  reasonCode: IngressReasonCode;
   gate?: AccessGraphGate;
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
-  groupAccess?: ChannelIngressSenderGroupAccessProjection;
+  providerMissingFallbackApplied: boolean;
 };
 
 export type ChannelIngressCommandAccess = {
@@ -139,11 +212,10 @@ export type ChannelIngressCommandAccess = {
   gate?: AccessGraphGate;
 };
 
-export type ChannelIngressEventAccess = {
-  ran: boolean;
-  authorized: boolean;
-  authMode: ChannelIngressEventInput["authMode"];
-  reasonCode: IngressReasonCode;
+export type ChannelIngressRouteAccess = {
+  allowed: boolean;
+  reasonCode?: IngressReasonCode;
+  reason?: string;
   gate?: AccessGraphGate;
 };
 
@@ -153,6 +225,7 @@ export type ChannelIngressActivationAccess = {
   shouldSkip: boolean;
   reasonCode: IngressReasonCode;
   effectiveWasMentioned?: boolean;
+  shouldBypassMention?: boolean;
   gate?: AccessGraphGate;
 };
 
@@ -160,18 +233,7 @@ export type ResolvedChannelMessageIngress = {
   state: ChannelIngressState;
   ingress: ChannelIngressDecision;
   senderAccess: ChannelIngressSenderAccess;
+  routeAccess: ChannelIngressRouteAccess;
   commandAccess: ChannelIngressCommandAccess;
-  eventAccess: ChannelIngressEventAccess;
   activationAccess: ChannelIngressActivationAccess;
-  accessFacts: AccessFacts;
-};
-
-export type ResolveChannelMessageIngressBundleParams = {
-  direct: ResolveChannelMessageIngressParams;
-  group: ResolveChannelMessageIngressParams;
-};
-
-export type ResolvedChannelMessageIngressBundle = {
-  direct: ResolvedChannelMessageIngress;
-  group: ResolvedChannelMessageIngress;
 };

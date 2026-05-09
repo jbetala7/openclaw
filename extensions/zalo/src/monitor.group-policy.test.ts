@@ -1,14 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it, vi } from "vitest";
-import { resolveZaloMessageIngressAccess } from "./access-policy.js";
+import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
 import type { ZaloAccountConfig } from "./types.js";
+
+function stringEntries(entries: Array<string | number> | undefined): string[] {
+  return (entries ?? []).map((entry) => String(entry));
+}
 
 async function resolveAccess(
   params: {
     cfg?: OpenClawConfig;
     accountConfig?: ZaloAccountConfig;
     providerConfigPresent?: boolean;
-    defaultGroupPolicy?: "open" | "allowlist" | "disabled";
+    defaultGroupPolicy?: GroupPolicy;
     isGroup?: boolean;
     senderId?: string;
     rawBody?: string;
@@ -17,142 +22,99 @@ async function resolveAccess(
   } = {},
 ) {
   const readAllowFromStore = vi.fn(async () => params.storeAllowFrom ?? []);
-  const result = await resolveZaloMessageIngressAccess({
-    accountId: "default",
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    accountConfig: {
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ...params.accountConfig,
-    },
+  const accountConfig = {
+    dmPolicy: "pairing",
+    groupPolicy: "allowlist",
+    allowFrom: [],
+    groupAllowFrom: [],
+    ...params.accountConfig,
+  } satisfies ZaloAccountConfig;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveZaloRuntimeGroupPolicy({
     providerConfigPresent: params.providerConfigPresent ?? true,
+    groupPolicy: accountConfig.groupPolicy,
     defaultGroupPolicy: params.defaultGroupPolicy ?? "open",
-    isGroup: params.isGroup ?? true,
-    chatId: "chat-1",
-    senderId: params.senderId ?? "123",
-    rawBody: params.rawBody ?? "hello",
-    readAllowFromStore,
-    commandRuntime: {
-      shouldComputeCommandAuthorized: () => params.shouldComputeCommandAuthorized ?? false,
+  });
+  const shouldComputeAuth = params.shouldComputeCommandAuthorized ?? false;
+  const isGroup = params.isGroup ?? true;
+  const result = await resolveStableChannelMessageIngress({
+    channelId: "zalo",
+    accountId: "default",
+    identity: {
+      key: "zalo-user-id",
+      normalize: normalizeZaloAllowEntry,
+      sensitivity: "pii",
+      entryIdPrefix: "zalo-entry",
     },
+    accessGroups: params.cfg?.accessGroups,
+    readStoreAllowFrom: async () => await readAllowFromStore(),
+    useAccessGroups: params.cfg?.commands?.useAccessGroups !== false,
+    subject: { stableId: params.senderId ?? "123" },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: "chat-1",
+    },
+    providerMissingFallbackApplied,
+    dmPolicy: accountConfig.dmPolicy ?? "pairing",
+    groupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: true },
+    allowFrom: stringEntries(accountConfig.allowFrom),
+    groupAllowFrom: stringEntries(accountConfig.groupAllowFrom),
+    command: shouldComputeAuth ? {} : undefined,
   });
   return { result, readAllowFromStore };
 }
 
 describe("zalo shared ingress access policy", () => {
-  it("blocks all group messages when policy is disabled", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "disabled",
-        groupAllowFrom: ["zalo:123"],
-      },
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: false,
-      groupPolicy: "disabled",
-      reason: "disabled",
-    });
-  });
-
-  it("blocks group messages on allowlist policy with empty allowlist", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-      },
-      senderId: "attacker",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "empty_allowlist",
-    });
-  });
-
-  it("blocks sender not in group allowlist", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["zalo:victim-user-001"],
-      },
-      senderId: "attacker-user-999",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "sender_not_allowlisted",
-    });
-  });
-
-  it("allows sender in group allowlist", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["zl:12345"],
-      },
-      senderId: "12345",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: true,
-      groupPolicy: "allowlist",
-      reason: "allowed",
-    });
-  });
-
-  it("allows group sender through allowFrom fallback when groupAllowFrom is unset", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "allowlist",
-        allowFrom: ["zl:12345"],
-        groupAllowFrom: [],
-      },
-      senderId: "12345",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: true,
-      groupPolicy: "allowlist",
-      reason: "allowed",
-    });
-  });
-
-  it("allows any sender with wildcard allowlist", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["*"],
-      },
-      senderId: "random-user",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: true,
-      groupPolicy: "allowlist",
-      reason: "allowed",
-    });
-  });
-
-  it("allows all group senders on open policy", async () => {
-    const { result } = await resolveAccess({
-      accountConfig: {
-        groupPolicy: "open",
-        groupAllowFrom: [],
-      },
-      senderId: "attacker-user-999",
-    });
-
-    expect(result.senderAccess.groupAccess).toMatchObject({
-      allowed: true,
-      groupPolicy: "open",
-      reason: "allowed",
-    });
-  });
+  it.each([
+    [
+      "disabled policy",
+      { groupPolicy: "disabled", groupAllowFrom: ["zalo:123"] },
+      "123",
+      false,
+      "group_policy_disabled",
+    ],
+    [
+      "empty allowlist",
+      { groupPolicy: "allowlist", groupAllowFrom: [] },
+      "attacker",
+      false,
+      "group_policy_empty_allowlist",
+    ],
+    [
+      "allowlist mismatch",
+      { groupPolicy: "allowlist", groupAllowFrom: ["zalo:victim-user-001"] },
+      "attacker-user-999",
+      false,
+      "group_policy_not_allowlisted",
+    ],
+    [
+      "Zalo prefix match",
+      { groupPolicy: "allowlist", groupAllowFrom: ["zl:12345"] },
+      "12345",
+      true,
+      "group_policy_allowed",
+    ],
+    [
+      "allowFrom fallback",
+      { groupPolicy: "allowlist", allowFrom: ["zl:12345"], groupAllowFrom: [] },
+      "12345",
+      true,
+      "group_policy_allowed",
+    ],
+    [
+      "open policy",
+      { groupPolicy: "open", groupAllowFrom: [] },
+      "attacker-user-999",
+      true,
+      "group_policy_open",
+    ],
+  ] as const)(
+    "maps %s through shared ingress",
+    async (_name, accountConfig, senderId, allowed, reasonCode) => {
+      const { result } = await resolveAccess({ accountConfig, senderId });
+      expect(result.senderAccess).toMatchObject({ allowed, reasonCode });
+    },
+  );
 
   it("keeps group control-command authorization separate from group sender access", async () => {
     const { result } = await resolveAccess({
@@ -185,7 +147,7 @@ describe("zalo shared ingress access policy", () => {
     expect(readAllowFromStore).toHaveBeenCalledTimes(1);
     expect(result.senderAccess).toMatchObject({
       decision: "allow",
-      ingressReasonCode: "dm_policy_allowlisted",
+      reasonCode: "dm_policy_allowlisted",
     });
     expect(result.commandAccess.authorized).toBe(true);
   });
@@ -203,7 +165,7 @@ describe("zalo shared ingress access policy", () => {
     expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(result.senderAccess).toMatchObject({
       decision: "block",
-      ingressReasonCode: "dm_policy_not_allowlisted",
+      reasonCode: "dm_policy_not_allowlisted",
     });
   });
 
@@ -218,7 +180,7 @@ describe("zalo shared ingress access policy", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      },
       accountConfig: {
         groupPolicy: "allowlist",
         groupAllowFrom: ["accessGroup:operators"],
@@ -226,10 +188,9 @@ describe("zalo shared ingress access policy", () => {
       senderId: "12345",
     });
 
-    expect(result.senderAccess.groupAccess).toMatchObject({
+    expect(result.senderAccess).toMatchObject({
       allowed: true,
-      groupPolicy: "allowlist",
-      reason: "allowed",
+      reasonCode: "group_policy_allowed",
     });
   });
 });

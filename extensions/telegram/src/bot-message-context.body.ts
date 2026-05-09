@@ -45,8 +45,8 @@ import {
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramCommandIngressAuthorization } from "./command-ingress.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
 type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
 type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
@@ -198,7 +198,6 @@ export async function resolveTelegramInboundBody(params: {
     effectiveDmAllow,
     effectiveGroupAllow,
     ownerAccess: { ownerList: [], senderIsOwner: false },
-    useAccessGroups,
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,

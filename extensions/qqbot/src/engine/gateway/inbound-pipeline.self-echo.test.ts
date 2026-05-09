@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { QQBotAccessResult } from "../access/index.js";
+import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -134,14 +134,21 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
       },
       access: {
         resolveInboundAccess: vi.fn(
-          (input): QQBotAccessResult => ({
-            decision: "allow",
-            reasonCode: input.isGroup ? "group_policy_allowed" : "dm_policy_open",
-            reason: input.isGroup ? "groupPolicy=open" : "dmPolicy=open",
-            effectiveAllowFrom: ["*"],
-            effectiveGroupAllowFrom: [],
-            dmPolicy: "open",
-            groupPolicy: "open",
+          (input): QQBotInboundAccess => ({
+            senderAccess: {
+              allowed: true,
+              decision: "allow",
+              reasonCode: input.isGroup ? "group_policy_allowed" : "dm_policy_open",
+              effectiveAllowFrom: [],
+              effectiveGroupAllowFrom: [],
+              providerMissingFallbackApplied: false,
+            },
+            commandAccess: {
+              requested: true,
+              authorized: true,
+              shouldBlockControlCommand: false,
+              reasonCode: "command_authorized",
+            },
           }),
         ),
         resolveSlashCommandAuthorization: vi.fn(() => true),

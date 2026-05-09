@@ -5,31 +5,25 @@ import {
   resolveAccessGroupAllowFromState,
 } from "./access-groups.js";
 
-describe("resolveAccessGroupAllowFromState", () => {
-  it("reports referenced, matched, missing, and unsupported groups", async () => {
-    const state = await resolveAccessGroupAllowFromState({
+describe("access group allowlists", () => {
+  it("reports static, missing, unsupported, failed, and compatibility expansion states", async () => {
+    const cfg = {
       accessGroups: {
-        admins: {
-          type: "message.senders",
-          members: {
-            "*": ["global-admin"],
-            test: ["local-admin"],
-          },
-        },
-        audience: {
-          type: "discord.channelAudience",
-          guildId: "guild-1",
-          channelId: "channel-1",
-        },
+        admins: { type: "message.senders", members: { "*": ["global"], test: ["local"] } },
+        audience: { type: "discord.channelAudience", guildId: "guild-1", channelId: "channel-1" },
       },
-      allowFrom: ["accessGroup:admins", "accessGroup:missing", "accessGroup:audience"],
-      channel: "test",
-      accountId: "default",
-      senderId: "local-admin",
-      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
-    });
+    } as OpenClawConfig;
 
-    expect(state).toMatchObject({
+    await expect(
+      resolveAccessGroupAllowFromState({
+        accessGroups: cfg.accessGroups,
+        allowFrom: ["accessGroup:admins", "accessGroup:missing", "accessGroup:audience"],
+        channel: "test",
+        accountId: "default",
+        senderId: "local",
+        isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      }),
+    ).resolves.toMatchObject({
       referenced: ["admins", "missing", "audience"],
       matched: ["admins"],
       missing: ["missing"],
@@ -39,57 +33,29 @@ describe("resolveAccessGroupAllowFromState", () => {
       hasReferences: true,
       hasMatch: true,
     });
-  });
 
-  it("reports failed dynamic membership without throwing", async () => {
-    const state = await resolveAccessGroupAllowFromState({
-      accessGroups: {
-        audience: {
-          type: "discord.channelAudience",
-          guildId: "guild-1",
-          channelId: "channel-1",
+    await expect(
+      resolveAccessGroupAllowFromState({
+        accessGroups: cfg.accessGroups,
+        allowFrom: ["accessGroup:audience"],
+        channel: "discord",
+        accountId: "default",
+        senderId: "discord:123",
+        resolveMembership: async () => {
+          throw new Error("discord lookup failed");
         },
-      },
-      allowFrom: ["accessGroup:audience"],
-      channel: "discord",
-      accountId: "default",
-      senderId: "discord:123",
-      resolveMembership: async () => {
-        throw new Error("discord lookup failed");
-      },
-    });
-
-    expect(state).toMatchObject({
-      referenced: ["audience"],
-      matched: [],
-      missing: [],
-      unsupported: [],
-      failed: ["audience"],
-      hasMatch: false,
-    });
-  });
-
-  it("keeps compatibility expansion behavior for matched groups", async () => {
-    const cfg = {
-      accessGroups: {
-        operators: {
-          type: "message.senders",
-          members: {
-            test: ["operator"],
-          },
-        },
-      },
-    } as OpenClawConfig;
+      }),
+    ).resolves.toMatchObject({ referenced: ["audience"], failed: ["audience"], hasMatch: false });
 
     await expect(
       expandAllowFromWithAccessGroups({
         cfg,
-        allowFrom: ["accessGroup:operators"],
+        allowFrom: ["accessGroup:admins"],
         channel: "test",
         accountId: "default",
-        senderId: "operator",
+        senderId: "local",
         isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
       }),
-    ).resolves.toEqual(["accessGroup:operators", "operator"]);
+    ).resolves.toEqual(["accessGroup:admins", "local"]);
   });
 });

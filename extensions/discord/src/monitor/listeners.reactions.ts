@@ -165,11 +165,10 @@ async function authorizeDiscordReactionIngress(
         tag: formatDiscordUserTag(params.user),
       },
       allowNameMatching: params.allowNameMatching,
-      useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
       eventKind: "reaction",
     });
-    if (access.decision !== "allow") {
-      return { allowed: false, reason: access.reason };
+    if (access.senderAccess.decision !== "allow") {
+      return { allowed: false, reason: access.senderAccess.reasonCode };
     }
   }
   if (

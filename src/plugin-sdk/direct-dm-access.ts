@@ -1,11 +1,14 @@
-import { type DmGroupAccessReasonCode } from "../channels/message-access/legacy-policy.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { type AccessGroupMembershipResolver } from "./access-groups.js";
 import {
-  defineChannelIngressIdentity,
-  resolveChannelMessageIngress,
-} from "./channel-ingress-runtime.js";
+  expandAllowFromWithAccessGroups,
+  type AccessGroupMembershipResolver,
+} from "./access-groups.js";
+import { DM_GROUP_ACCESS_REASON, type DmGroupAccessReasonCode } from "./channel-access-compat.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "./channel-access-compat.js";
 export type { AccessGroupMembershipResolver } from "./access-groups.js";
 
 export type DirectDmCommandAuthorizationRuntime = {
@@ -31,29 +34,17 @@ export type ResolvedInboundDirectDmAccess = {
   commandAuthorized: boolean | undefined;
 };
 
-type DirectDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
-
-function normalizeDirectDmPolicy(policy: string | null | undefined): DirectDmPolicy {
-  return policy === "pairing" ||
-    policy === "allowlist" ||
-    policy === "open" ||
-    policy === "disabled"
-    ? policy
-    : "allowlist";
-}
-
-function createDirectDmIngressIdentity(params: {
-  senderId: string;
-  isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
-}) {
-  return defineChannelIngressIdentity({
-    primary: {
-      key: "sender-id",
-    },
-    matchEntry({ entry }) {
-      return entry.value === "*" || params.isSenderAllowed(params.senderId, [entry.value]);
-    },
-  });
+function toLegacyDmReasonCode(reasonCode: string): DmGroupAccessReasonCode {
+  switch (reasonCode) {
+    case DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN:
+    case DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED:
+    case DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED:
+    case DM_GROUP_ACCESS_REASON.DM_POLICY_PAIRING_REQUIRED:
+    case DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED:
+      return reasonCode;
+    default:
+      return DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED;
+  }
 }
 
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
@@ -71,77 +62,76 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
   modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
   readStoreAllowFrom?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<ResolvedInboundDirectDmAccess> {
-  const rawDmPolicy = params.dmPolicy ?? "pairing";
-  const dmPolicy = normalizeDirectDmPolicy(rawDmPolicy);
-  const resolveAccessGroupMembership = params.resolveAccessGroupMembership;
+  const dmPolicy = params.dmPolicy ?? "pairing";
   const shouldComputeAuth = params.runtime.shouldComputeCommandAuthorized(
     params.rawBody,
     params.cfg,
   );
-  const resolved = await resolveChannelMessageIngress({
-    channelId: params.channel,
-    accountId: params.accountId,
-    identity: createDirectDmIngressIdentity({
+  const storeAllowFrom =
+    dmPolicy === "pairing"
+      ? await readStoreAllowFromForDmPolicy({
+          provider: params.channel,
+          accountId: params.accountId,
+          dmPolicy,
+          readStore: params.readStoreAllowFrom,
+        })
+      : [];
+  const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: params.allowFrom,
+      channel: params.channel,
+      accountId: params.accountId,
       senderId: params.senderId,
       isSenderAllowed: params.isSenderAllowed,
+      resolveMembership: params.resolveAccessGroupMembership,
     }),
-    subject: { stableId: params.senderId },
-    conversation: {
-      kind: "direct",
-      id: params.senderId,
-    },
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: true,
-    },
-    accessGroups: params.cfg.accessGroups,
-    resolveAccessGroupMembership: resolveAccessGroupMembership
-      ? async ({ name, group, channelId, accountId }) =>
-          await resolveAccessGroupMembership({
-            cfg: params.cfg,
-            name,
-            group,
-            channel: channelId as ChannelId,
-            accountId,
-            senderId: params.senderId,
-          })
-      : undefined,
-    policy: {
-      dmPolicy,
-      groupPolicy: "disabled",
-    },
-    allowFrom: params.allowFrom,
-    readStoreAllowFrom: params.readStoreAllowFrom
-      ? async () => await params.readStoreAllowFrom?.(params.channel, params.accountId)
-      : undefined,
-    useDefaultPairingStore: params.readStoreAllowFrom == null,
-    command: shouldComputeAuth
-      ? {
-          useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
-          allowTextCommands: false,
-          hasControlCommand: true,
-          modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-        }
-      : undefined,
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: storeAllowFrom,
+      channel: params.channel,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      isSenderAllowed: params.isSenderAllowed,
+      resolveMembership: params.resolveAccessGroupMembership,
+    }),
+  ]);
+  const access = resolveDmGroupAccessWithLists({
+    isGroup: false,
+    dmPolicy,
+    allowFrom,
+    storeAllowFrom: effectiveStoreAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
+    isSenderAllowed: (allowEntries) => params.isSenderAllowed(params.senderId, allowEntries),
   });
-  const access = resolved.senderAccess;
-
+  const reasonCode = toLegacyDmReasonCode(access.reasonCode);
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     access.effectiveAllowFrom,
   );
+  const commandAuthorized = shouldComputeAuth
+    ? (params.runtime.resolveCommandAuthorizedFromAuthorizers?.({
+        useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
+        authorizers: [
+          {
+            configured: access.effectiveAllowFrom.length > 0,
+            allowed: senderAllowedForCommands,
+          },
+        ],
+        modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
+      }) ?? senderAllowedForCommands)
+    : undefined;
 
   return {
     access: {
       decision: access.decision,
-      reasonCode: access.reasonCode,
+      reasonCode,
       reason: access.reason,
       effectiveAllowFrom: access.effectiveAllowFrom,
     },
     shouldComputeAuth,
     senderAllowedForCommands,
-    commandAuthorized: shouldComputeAuth ? resolved.commandAccess.authorized : undefined,
+    commandAuthorized,
   };
 }
 

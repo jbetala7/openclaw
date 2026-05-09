@@ -3,15 +3,12 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/group-access";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -33,8 +30,8 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeZalouserAllowEntry, resolveZalouserIngressAccess } from "./access-policy.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -120,6 +117,14 @@ type ZalouserGroupHistoryState = {
   groupHistories: Map<string, HistoryEntry[]>;
 };
 
+function normalizeZalouserAllowEntry(entry: string): string {
+  return entry.replace(/^(zalouser|zlu):/i, "").trim();
+}
+
+function normalizeZalouserSender(value: string): string | null {
+  return normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null;
+}
+
 function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   const threadId = message.threadId?.trim() || "unknown";
   if (message.isGroup) {
@@ -132,6 +137,40 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
 function resolveZalouserDmSessionScope(config: OpenClawConfig) {
   const configured = config.session?.dmScope;
   return configured === "main" || !configured ? "per-channel-peer" : configured;
+}
+
+function resolveZalouserRouteAccess(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  configured: boolean;
+  matched: boolean;
+  enabled?: boolean;
+}): {
+  allowed: boolean;
+  reason?: "disabled" | "empty_allowlist" | "route_not_allowlisted" | "route_disabled";
+} {
+  if (params.groupPolicy === "disabled") {
+    return { allowed: false, reason: "disabled" };
+  }
+  if (params.matched && params.enabled === false) {
+    return { allowed: false, reason: "route_disabled" };
+  }
+  if (params.groupPolicy !== "allowlist") {
+    return { allowed: true };
+  }
+  if (!params.configured) {
+    return { allowed: false, reason: "empty_allowlist" };
+  }
+  return params.matched ? { allowed: true } : { allowed: false, reason: "route_not_allowlisted" };
+}
+
+function senderScopedZalouserGroupPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  groupAllowFrom: readonly string[];
+}) {
+  if (params.groupPolicy === "disabled") {
+    return "disabled";
+  }
+  return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
 }
 
 function resolveZalouserInboundSessionKey(params: {
@@ -308,11 +347,11 @@ async function processMessage(
         allowNameMatching,
       }),
     );
-    const routeAccess = evaluateGroupRouteAccessForPolicy({
+    const routeAccess = resolveZalouserRouteAccess({
       groupPolicy,
-      routeAllowlistConfigured,
-      routeMatched: Boolean(groupEntry),
-      routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
+      configured: routeAllowlistConfigured,
+      matched: Boolean(groupEntry),
+      enabled: isZalouserGroupEntryAllowed(groupEntry),
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {
@@ -333,27 +372,45 @@ async function processMessage(
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const configAllowFrom = normalizeStringEntries(account.config.allowFrom);
+  const configGroupAllowFrom = normalizeStringEntries(account.config.groupAllowFrom);
   const senderGroupPolicy =
     routeAllowlistConfigured && configGroupAllowFrom.length === 0
       ? groupPolicy
-      : resolveSenderScopedGroupPolicy({
+      : senderScopedZalouserGroupPolicy({
           groupPolicy,
           groupAllowFrom: configGroupAllowFrom,
         });
-  const accessDecision = await resolveZalouserIngressAccess({
-    cfg: config,
+  const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
+    commandBody,
+    config,
+  );
+  const accessDecision = await resolveStableChannelMessageIngress({
+    channelId: "zalouser",
     accountId: account.accountId,
-    isGroup,
-    senderId,
-    rawBody: commandBody,
+    identity: {
+      normalize: normalizeZalouserSender,
+      sensitivity: "pii",
+      entryIdPrefix: "zalouser-entry",
+    },
+    cfg: config,
+    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+    subject: { stableId: senderId },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? "group" : senderId,
+    },
     dmPolicy,
     groupPolicy: senderGroupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: configAllowFrom,
     groupAllowFrom: configGroupAllowFrom,
-    readAllowFromStore: pairing.readAllowFromStore,
-    commandRuntime: core.channel.commands,
+    command: shouldComputeCommandAuth
+      ? {
+          directGroupAllowFrom: "effective",
+          commandGroupAllowFromFallbackToAllowFrom: true,
+        }
+      : undefined,
   });
   if (isGroup && accessDecision.senderAccess.decision !== "allow") {
     if (accessDecision.senderAccess.reasonCode === "group_policy_empty_allowlist") {
@@ -631,81 +688,64 @@ async function processMessage(
     },
   };
 
-  await core.channel.turn.run({
+  await core.channel.turn.runAssembled({
     channel: "zalouser",
     accountId: account.accountId,
-    raw: message,
-    adapter: {
-      ingest: () => ({
-        id: messageSid ?? `${message.timestampMs}`,
-        timestamp: message.timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: commandBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "zalouser",
-        accountId: account.accountId,
-        agentId: route.agentId,
-        routeSessionKey: route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-        delivery: {
-          preparePayload: (payload) => {
-            if (payload.text === undefined) {
-              return payload;
-            }
-            return {
-              ...payload,
-              text: core.channel.text.convertMarkdownTables(
-                payload.text,
-                core.channel.text.resolveMarkdownTableMode({
-                  cfg: config,
-                  channel: "zalouser",
-                  accountId: account.accountId,
-                }),
-              ),
-            };
-          },
-          durable: () => ({
-            to: normalizedTo,
-          }),
-          deliver: async (payload) => {
-            return await deliverZalouserReply({
-              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-              profile: account.profile,
-              chatId,
-              isGroup,
-              runtime,
-              core,
-              config,
+    cfg: config,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) => {
+        if (payload.text === undefined) {
+          return payload;
+        }
+        return {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(
+            payload.text,
+            core.channel.text.resolveMarkdownTableMode({
+              cfg: config,
+              channel: "zalouser",
               accountId: account.accountId,
-              tableMode: "off",
-            });
-          },
-          onDelivered: (_payload, _info, result) => {
-            if (result?.visibleReplySent !== false) {
-              statusSink?.({ lastOutboundAt: Date.now() });
-            }
-          },
-          onError: (err, info) => {
-            runtime.error(
-              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
-            );
-          },
-        },
-        replyPipeline,
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-          },
-        },
+            }),
+          ),
+        };
+      },
+      durable: () => ({
+        to: normalizedTo,
       }),
+      deliver: async (payload) => {
+        return await deliverZalouserReply({
+          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+          profile: account.profile,
+          chatId,
+          isGroup,
+          runtime,
+          core,
+          config,
+          accountId: account.accountId,
+          tableMode: "off",
+        });
+      },
+      onDelivered: (_payload, _info, result) => {
+        if (result?.visibleReplySent !== false) {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        }
+      },
+      onError: (err, info) => {
+        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
+      },
+    },
+    replyPipeline,
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+      },
     },
   });
   if (isGroup && historyKey) {

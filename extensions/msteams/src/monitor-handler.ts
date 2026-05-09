@@ -97,7 +97,7 @@ async function isInvokeAuthorized(params: {
     return false;
   }
 
-  if (!isDirectMessage && resolved.senderAccess.groupAccess?.allowed === false) {
+  if (!isDirectMessage && !resolved.senderAccess.allowed) {
     deps.log.debug?.(deniedLogs.group, {
       sender: senderId,
       conversationId,

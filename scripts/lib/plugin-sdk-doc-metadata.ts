@@ -50,6 +50,9 @@ export const pluginSdkDocMetadata = {
   "plugin-test-runtime": {
     category: "utilities",
   },
+  "access-groups": {
+    category: "channel",
+  },
   "channel-actions": {
     category: "channel",
   },

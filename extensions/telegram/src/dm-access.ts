@@ -1,18 +1,16 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
-import { resolveChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-types";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { resolveSenderAllowMatch, type NormalizedAllowFrom } from "./bot-access.js";
+import type { NormalizedAllowFrom } from "./bot-access.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   createTelegramIngressSubject,
+  createTelegramIngressResolver,
   telegramAllowEntries,
-  TELEGRAM_CHANNEL_ID,
-  telegramIngressIdentity,
 } from "./ingress.js";
 
 type TelegramDmAccessLogger = {
@@ -45,24 +43,14 @@ async function decideTelegramDmAccess(params: {
   sender: TelegramSenderIdentity;
   effectiveDmAllow: NormalizedAllowFrom;
 }) {
-  const result = await resolveChannelMessageIngress({
-    channelId: TELEGRAM_CHANNEL_ID,
-    accountId: params.accountId,
-    identity: telegramIngressIdentity,
+  const result = await createTelegramIngressResolver({ accountId: params.accountId }).message({
     subject: createTelegramIngressSubject(params.sender.candidateId),
     conversation: {
       kind: "direct",
       id: params.sender.candidateId,
     },
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: true,
-    },
-    policy: {
-      dmPolicy: params.dmPolicy,
-      groupPolicy: "disabled",
-    },
+    dmPolicy: params.dmPolicy,
+    groupPolicy: "disabled",
     allowFrom: telegramAllowEntries(params.effectiveDmAllow),
   });
   return result.ingress;
@@ -98,14 +86,6 @@ export async function enforceTelegramDmAccess(params: {
   }
 
   const sender = resolveTelegramSenderIdentity(msg, chatId);
-  const allowMatch = resolveSenderAllowMatch({
-    allow: effectiveDmAllow,
-    senderId: sender.candidateId,
-    senderUsername: sender.username,
-  });
-  const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-    allowMatch.matchSource ?? "none"
-  }`;
   const access = await decideTelegramDmAccess({
     accountId,
     dmPolicy,
@@ -117,9 +97,7 @@ export async function enforceTelegramDmAccess(params: {
   }
 
   if (dmPolicy === "open") {
-    logVerbose(
-      `Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=open, ${allowMatchMeta})`,
-    );
+    logVerbose(`Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=open)`);
     return false;
   }
 
@@ -151,8 +129,6 @@ export async function enforceTelegramDmAccess(params: {
               username: sender.username || undefined,
               firstName: sender.firstName,
               lastName: sender.lastName,
-              matchKey: allowMatch.matchKey ?? "none",
-              matchSource: allowMatch.matchSource ?? "none",
             },
             "telegram pairing request",
           );
@@ -174,8 +150,6 @@ export async function enforceTelegramDmAccess(params: {
     return false;
   }
 
-  logVerbose(
-    `Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-  );
+  logVerbose(`Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=${dmPolicy})`);
   return false;
 }

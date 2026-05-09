@@ -1317,7 +1317,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             return;
           }
           logVerboseMessage(
-            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.senderAccess.reason})`,
+            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.senderAccess.reasonCode})`,
           );
           return;
         }
@@ -1921,11 +1921,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (reactionAccess.ingress.decision !== "allow") {
       if (kind === "direct") {
         logVerboseMessage(
-          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reason})`,
+          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode})`,
         );
       } else {
         logVerboseMessage(
-          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reason} channel=${channelId})`,
+          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode} channel=${channelId})`,
         );
       }
       return;

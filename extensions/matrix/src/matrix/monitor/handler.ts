@@ -74,7 +74,6 @@ import { resolveMatrixInboundRoute } from "./route.js";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
-  formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
@@ -744,14 +743,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           accountId,
           eventKind: isReactionEvent ? "reaction" : "message",
         });
-        const {
-          effectiveGroupAllowFrom,
-          effectiveRoomUsers,
-          directAllowMatch,
-          roomUserMatch,
-          groupAllowMatch,
-          messageIngress,
-        } = accessState;
+        const { effectiveGroupAllowFrom, effectiveRoomUsers, messageIngress } = accessState;
         const ingressDecision = messageIngress.ingress;
 
         if (isDirectMessage) {
@@ -759,7 +751,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             await commitInboundEventIfClaimed();
             return undefined;
           }
-          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
+          const senderReason = messageIngress.senderAccess.reasonCode;
           if (ingressDecision.decision !== "allow") {
             if (ingressDecision.admission === "pairing-required") {
               const senderName = await getSenderName();
@@ -777,8 +769,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
                 logVerboseMessage(
                   created
-                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (reason=${senderReason})`
+                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (reason=${senderReason})`,
                 );
                 try {
                   const { sendMessageMatrix } = await loadMatrixSendModule();
@@ -807,7 +799,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
             if (isReactionEvent || dmPolicy !== "pairing") {
               logVerboseMessage(
-                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, reason=${senderReason})`,
               );
               await commitInboundEventIfClaimed();
             }
@@ -816,28 +808,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
 
         if (isRoom && ingressDecision.decision !== "allow") {
-          if (roomUserMatch && !roomUserMatch.allowed) {
-            logVerboseMessage(
-              `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
-                roomUserMatch,
-              )})`,
-            );
-          } else if (
-            groupPolicy === "allowlist" &&
-            effectiveRoomUsers.length === 0 &&
-            groupAllowMatch &&
-            !groupAllowMatch.allowed
-          ) {
-            logVerboseMessage(
-              `matrix: blocked sender ${senderId} (groupAllowFrom, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
-                groupAllowMatch,
-              )})`,
-            );
-          } else {
-            logVerboseMessage(
-              `matrix: blocked sender ${senderId} (ingress=${ingressDecision.reasonCode}, ${roomMatchMeta})`,
-            );
-          }
+          logVerboseMessage(
+            `matrix: blocked sender ${senderId} (ingress=${ingressDecision.reasonCode}, ${roomMatchMeta})`,
+          );
           await commitInboundEventIfClaimed();
           return undefined;
         }

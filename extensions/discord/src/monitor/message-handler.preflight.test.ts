@@ -318,9 +318,14 @@ describe("preflightDiscordMessage", () => {
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
-      commandAuthorized: true,
-      decision: "allow",
-      allowMatch: { allowed: true, matchedBy: "allowFrom", value: "123" },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+        reasonCode: "dm_policy_allowlisted",
+      },
+      commandAccess: {
+        authorized: true,
+      },
     });
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);

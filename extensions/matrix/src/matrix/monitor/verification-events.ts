@@ -374,7 +374,7 @@ async function isVerificationNoticeAuthorized(params: {
     senderId: params.senderId,
     isRoom: false,
   });
-  if (accessState.directAllowMatch.allowed) {
+  if (accessState.messageIngress.senderAccess.decision === "allow") {
     return true;
   }
   params.logVerboseMessage(

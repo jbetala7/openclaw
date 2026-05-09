@@ -73,7 +73,6 @@ export async function resolveAccessGroupAllowFromState(params: {
     hasMatch: false,
   };
   const groups = params.accessGroups;
-  const matched: string[] = [];
   for (const name of names) {
     const group = groups?.[name];
     if (!group) {
@@ -90,7 +89,6 @@ export async function resolveAccessGroupAllowFromState(params: {
       params.isSenderAllowed?.(params.senderId, senderEntries) === true
     ) {
       state.matched.push(name);
-      matched.push(name);
       continue;
     }
 
@@ -116,10 +114,11 @@ export async function resolveAccessGroupAllowFromState(params: {
     }
     if (allowed) {
       state.matched.push(name);
-      matched.push(name);
     }
   }
-  state.matchedAllowFromEntries = matched.map((name) => `${ACCESS_GROUP_ALLOW_FROM_PREFIX}${name}`);
+  state.matchedAllowFromEntries = state.matched.map(
+    (name) => `${ACCESS_GROUP_ALLOW_FROM_PREFIX}${name}`,
+  );
   state.hasMatch = state.matchedAllowFromEntries.length > 0;
   return state;
 }

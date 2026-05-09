@@ -1,24 +1,13 @@
-import type { ChannelIngressPolicyInput } from "openclaw/plugin-sdk/channel-ingress";
 import {
+  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
-  resolveChannelMessageIngressBundle,
-  resolveChannelMessageIngress,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
 
-type MatrixMonitorAllowListMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user";
-};
-
 type MatrixMonitorAccessState = {
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
-  directAllowMatch: MatrixMonitorAllowListMatch;
-  roomUserMatch: MatrixMonitorAllowListMatch | null;
-  groupAllowMatch: MatrixMonitorAllowListMatch | null;
   messageIngress: ResolvedChannelMessageIngress;
   accountId: string;
   senderId: string;
@@ -44,35 +33,21 @@ const matrixIngressIdentity = defineStableChannelIngressIdentity({
   },
 });
 
-function resolveMatrixIngressGroupPolicy(params: {
+function resolveMatrixGroupIngress(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
-}): ChannelIngressPolicyInput["groupPolicy"] {
+}): { groupPolicy: "open" | "allowlist" | "disabled"; groupAllowFrom: string[] } {
   if (params.groupPolicy === "disabled") {
-    return "disabled";
+    return { groupPolicy: "disabled", groupAllowFrom: [] };
   }
   if (params.effectiveRoomUsers.length > 0) {
-    return "allowlist";
+    return { groupPolicy: "allowlist", groupAllowFrom: params.effectiveRoomUsers };
   }
   if (params.groupPolicy === "allowlist" && params.effectiveGroupAllowFrom.length > 0) {
-    return "allowlist";
+    return { groupPolicy: "allowlist", groupAllowFrom: params.effectiveGroupAllowFrom };
   }
-  return "open";
-}
-
-function resolveMatrixIngressGroupAllowFrom(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
-  effectiveGroupAllowFrom: string[];
-  effectiveRoomUsers: string[];
-}): string[] {
-  if (params.effectiveRoomUsers.length > 0) {
-    return params.effectiveRoomUsers;
-  }
-  if (params.groupPolicy === "allowlist" && params.effectiveGroupAllowFrom.length > 0) {
-    return params.effectiveGroupAllowFrom;
-  }
-  return [];
+  return { groupPolicy: "open", groupAllowFrom: [] };
 }
 
 export async function resolveMatrixMonitorAccessState(params: {
@@ -91,94 +66,41 @@ export async function resolveMatrixMonitorAccessState(params: {
   const groupPolicy = params.groupPolicy ?? "open";
   const effectiveGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
   const effectiveRoomUsers = normalizeMatrixAllowList(params.roomUsers);
-  const ingressGroupPolicy = resolveMatrixIngressGroupPolicy({
+  const groupIngress = resolveMatrixGroupIngress({
     groupPolicy,
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
   });
   const accountId = params.accountId ?? "default";
   const eventKind = params.eventKind ?? "message";
-  const directInput = {
+  const ingress = createChannelIngressResolver({
     channelId: "matrix",
     accountId,
     identity: matrixIngressIdentity,
-    subject: { stableId: params.senderId },
-    conversation: {
-      kind: "direct" as const,
-      id: "matrix-dm",
-    },
-    event: {
-      kind: eventKind,
-      authMode: "inbound" as const,
-      mayPair: !params.isRoom && eventKind === "message",
-    },
-    policy: {
-      dmPolicy,
-      groupPolicy: "disabled" as const,
-      groupAllowFromFallbackToAllowFrom: false,
-    },
-    allowFrom: params.allowFrom,
     readStoreAllowFrom: async () => params.storeAllowFrom,
-  };
-  const groupInput = {
-    channelId: "matrix",
-    accountId,
-    identity: matrixIngressIdentity,
+  });
+  const resolved = await ingress.message({
     subject: { stableId: params.senderId },
     conversation: {
-      kind: "group" as const,
-      id: "matrix-room",
+      kind: params.isRoom ? "group" : "direct",
+      id: params.isRoom ? "matrix-room" : "matrix-dm",
     },
     event: {
       kind: eventKind,
       authMode: "inbound" as const,
-      mayPair: false,
+      mayPair: params.isRoom ? false : eventKind === "message",
     },
-    policy: {
-      dmPolicy,
-      groupPolicy: ingressGroupPolicy,
-      groupAllowFromFallbackToAllowFrom: false,
-    },
+    dmPolicy,
+    groupPolicy: params.isRoom ? groupIngress.groupPolicy : "disabled",
+    policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: params.allowFrom,
-    groupAllowFrom: resolveMatrixIngressGroupAllowFrom({
-      groupPolicy,
-      effectiveGroupAllowFrom,
-      effectiveRoomUsers,
-    }),
-  };
-  const { direct: directResolved, group: resolved } = params.isRoom
-    ? await resolveChannelMessageIngressBundle({
-        direct: directInput,
-        group: groupInput,
-      })
-    : { direct: await resolveChannelMessageIngress(directInput), group: undefined };
-  const effectiveAllowFrom = directResolved.senderAccess.effectiveAllowFrom;
-  const directAllowMatch = resolveMatrixAllowListMatch({
-    allowList: effectiveAllowFrom,
-    userId: params.senderId,
+    ...(params.isRoom ? { groupAllowFrom: groupIngress.groupAllowFrom } : {}),
   });
-  const roomUserMatch =
-    params.isRoom && effectiveRoomUsers.length > 0
-      ? resolveMatrixAllowListMatch({
-          allowList: effectiveRoomUsers,
-          userId: params.senderId,
-        })
-      : null;
-  const groupAllowMatch =
-    effectiveGroupAllowFrom.length > 0
-      ? resolveMatrixAllowListMatch({
-          allowList: effectiveGroupAllowFrom,
-          userId: params.senderId,
-        })
-      : null;
 
   return {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
-    directAllowMatch,
-    roomUserMatch,
-    groupAllowMatch,
-    messageIngress: resolved ?? directResolved,
+    messageIngress: resolved,
     accountId,
     senderId: params.senderId,
     isRoom: params.isRoom,
@@ -192,29 +114,23 @@ export async function resolveMatrixMonitorCommandAccess(
     allowTextCommands: boolean;
     hasControlCommand: boolean;
   },
-): Promise<ResolvedChannelMessageIngress["commandAccess"]> {
+) {
   const commandAllowFrom = state.isRoom ? [] : state.messageIngress.senderAccess.effectiveAllowFrom;
   const commandGroupAllowFrom =
     state.effectiveRoomUsers.length > 0 ? state.effectiveRoomUsers : state.effectiveGroupAllowFrom;
-  const resolved = await resolveChannelMessageIngress({
+  const resolved = await createChannelIngressResolver({
     channelId: "matrix",
     accountId: state.accountId,
     identity: matrixIngressIdentity,
+  }).command({
     subject: { stableId: state.senderId },
     conversation: {
       kind: state.isRoom ? "group" : "direct",
       id: state.isRoom ? "matrix-room" : "matrix-dm",
     },
-    event: {
-      kind: "message",
-      authMode: "command",
-      mayPair: false,
-    },
-    policy: {
-      dmPolicy: "allowlist",
-      groupPolicy: "allowlist",
-      groupAllowFromFallbackToAllowFrom: false,
-    },
+    dmPolicy: "allowlist",
+    groupPolicy: "allowlist",
+    policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: commandAllowFrom,
     groupAllowFrom: commandGroupAllowFrom,
     command: {

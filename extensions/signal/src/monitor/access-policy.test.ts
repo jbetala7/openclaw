@@ -1,4 +1,4 @@
-import type { AccessGroupsConfig } from "openclaw/plugin-sdk/config-types";
+import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it, vi } from "vitest";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 
@@ -25,13 +25,20 @@ async function resolveGroupAccess(params: {
     groupAllowFrom: params.groupAllowFrom ?? [],
     sender: SIGNAL_SENDER,
     groupId: params.groupId,
-    accessGroups: params.accessGroups,
+    isGroup: true,
+    cfg: accessGroupsConfig(params.accessGroups),
     readStoreAllowFrom: async () => params.storeAllowFrom ?? [],
   });
   return {
     ...access,
-    groupDecision: access.resolveAccessDecision(true),
+    groupDecision: access.senderAccess,
   };
+}
+
+function accessGroupsConfig(
+  accessGroups: AccessGroupsConfig | undefined,
+): Pick<OpenClawConfig, "accessGroups"> | undefined {
+  return accessGroups ? { accessGroups } : undefined;
 }
 
 describe("resolveSignalAccessState", () => {
@@ -86,7 +93,7 @@ describe("resolveSignalAccessState", () => {
   });
 
   it("does not match group ids against direct-message allowFrom entries", async () => {
-    const { dmAccess } = await resolveSignalAccessState({
+    const { senderAccess } = await resolveSignalAccessState({
       accountId: "default",
       dmPolicy: "allowlist",
       groupPolicy: "allowlist",
@@ -94,30 +101,32 @@ describe("resolveSignalAccessState", () => {
       groupAllowFrom: [],
       sender: SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
+      isGroup: false,
     });
 
-    expect(dmAccess.decision).toBe("block");
+    expect(senderAccess.decision).toBe("block");
   });
 
   it("allows direct messages through static message sender access groups", async () => {
-    const { dmAccess } = await resolveSignalAccessState({
+    const { senderAccess } = await resolveSignalAccessState({
       accountId: "default",
       dmPolicy: "allowlist",
       groupPolicy: "allowlist",
       allowFrom: ["accessGroup:operators"],
       groupAllowFrom: [],
       sender: SIGNAL_SENDER,
-      accessGroups: {
+      isGroup: false,
+      cfg: accessGroupsConfig({
         operators: {
           type: "message.senders",
           members: {
             signal: [SIGNAL_SENDER.e164],
           },
         },
-      },
+      }),
     });
 
-    expect(dmAccess.decision).toBe("allow");
+    expect(senderAccess.decision).toBe("allow");
   });
 
   it("allows group messages through static message sender access groups", async () => {
@@ -138,18 +147,19 @@ describe("resolveSignalAccessState", () => {
   });
 
   it("allows paired direct senders from the pairing store", async () => {
-    const { dmAccess } = await resolveSignalAccessState({
+    const { senderAccess } = await resolveSignalAccessState({
       accountId: "default",
       dmPolicy: "pairing",
       groupPolicy: "allowlist",
       allowFrom: [],
       groupAllowFrom: [],
       sender: SIGNAL_SENDER,
+      isGroup: false,
       readStoreAllowFrom: async () => [SIGNAL_SENDER.e164],
     });
 
-    expect(dmAccess.decision).toBe("allow");
-    expect(dmAccess.effectiveAllowFrom).toEqual([SIGNAL_SENDER.e164]);
+    expect(senderAccess.decision).toBe("allow");
+    expect(senderAccess.effectiveAllowFrom).toEqual([SIGNAL_SENDER.e164]);
   });
 
   it("does not let pairing-store senders satisfy group access", async () => {
@@ -181,11 +191,12 @@ describe("resolveSignalAccessState", () => {
       groupAllowFrom: [],
       sender: SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
+      isGroup: true,
       hasControlCommand: true,
     });
 
-    expect(access.resolveAccessDecision(true).decision).toBe("allow");
-    expect(access.resolveCommandAccess(true)).toMatchObject({
+    expect(access.senderAccess.decision).toBe("allow");
+    expect(access.commandAccess).toMatchObject({
       authorized: false,
       shouldBlockControlCommand: true,
     });
@@ -200,10 +211,11 @@ describe("resolveSignalAccessState", () => {
       groupAllowFrom: [SIGNAL_SENDER.e164],
       sender: SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
+      isGroup: true,
       hasControlCommand: true,
     });
 
-    expect(access.resolveCommandAccess(true)).toMatchObject({
+    expect(access.commandAccess).toMatchObject({
       authorized: true,
       shouldBlockControlCommand: false,
     });

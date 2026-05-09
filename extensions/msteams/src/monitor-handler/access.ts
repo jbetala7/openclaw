@@ -1,13 +1,7 @@
 import {
-  type ChannelIngressIdentifierKind,
-  type RouteGateFacts,
-} from "openclaw/plugin-sdk/channel-ingress";
-import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-  routeAllowlistFact,
-  routeDenyWhenSenderEmptyFact,
-  type ResolvedChannelMessageIngress,
+  channelIngressRoutes,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -22,10 +16,8 @@ import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
-type MSTeamsGroupPolicy = "open" | "allowlist" | "disabled";
-const MSTEAMS_SENDER_NAME_KIND =
-  "plugin:msteams-sender-name" as const satisfies ChannelIngressIdentifierKind;
-const msteamsIngressIdentity = defineStableChannelIngressIdentity({
+const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
+const msteamsIngressIdentity = {
   key: "sender-id",
   normalize: normalizeIngressValue,
   aliases: [
@@ -40,79 +32,17 @@ const msteamsIngressIdentity = defineStableChannelIngressIdentity({
   isWildcardEntry: (entry) => normalizeIngressValue(entry) === "*",
   resolveEntryId: ({ entryIndex, fieldKey }) =>
     `msteams-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "id"}`,
-});
+} satisfies StableChannelIngressIdentityParams;
 
 function normalizeIngressValue(value?: string | null): string | null {
   return normalizeOptionalLowercaseString(value) ?? null;
-}
-
-function createMSTeamsRouteFacts(params: {
-  isDirectMessage: boolean;
-  routeAllowed: boolean;
-  routeAllowlistConfigured: boolean;
-  groupPolicy: MSTeamsGroupPolicy;
-}): RouteGateFacts[] {
-  if (params.isDirectMessage || !params.routeAllowlistConfigured) {
-    return [];
-  }
-  if (!params.routeAllowed) {
-    return [
-      routeAllowlistFact({
-        id: "msteams:team-channel",
-        kind: "nestedAllowlist",
-        matched: false,
-        precedence: 0,
-        match: {
-          matched: false,
-          matchedEntryIds: [],
-        },
-      }),
-    ];
-  }
-  const fact =
-    params.groupPolicy === "allowlist"
-      ? routeDenyWhenSenderEmptyFact({
-          id: "msteams:team-channel",
-          kind: "nestedAllowlist",
-          precedence: 0,
-          senderAllowFromSource: "effective-group",
-          match: {
-            matched: true,
-            matchedEntryIds: ["msteams-route"],
-          },
-        })
-      : routeAllowlistFact({
-          id: "msteams:team-channel",
-          kind: "nestedAllowlist",
-          matched: true,
-          precedence: 0,
-          match: {
-            matched: true,
-            matchedEntryIds: ["msteams-route"],
-          },
-        });
-  return [fact];
 }
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
-}): Promise<
-  ResolvedChannelMessageIngress & {
-    msteamsCfg: NonNullable<OpenClawConfig["channels"]>["msteams"] | undefined;
-    pairing: ReturnType<typeof createChannelPairingController>;
-    isDirectMessage: boolean;
-    conversationId: string;
-    senderId: string;
-    senderName: string;
-    dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
-    channelGate: ReturnType<typeof resolveMSTeamsRouteConfig>;
-    configuredDmAllowFrom: Array<string | number>;
-    allowNameMatching: boolean;
-    groupPolicy: MSTeamsGroupPolicy;
-  }
-> {
+}) {
   const activity = params.activity;
   const msteamsCfg = params.cfg.channels?.msteams;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
@@ -145,10 +75,12 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  const resolved = await resolveChannelMessageIngress({
+  const resolved = await resolveStableChannelMessageIngress({
     channelId: "msteams",
     accountId: pairing.accountId,
     identity: msteamsIngressIdentity,
+    cfg: params.cfg,
+    readStoreAllowFrom: pairing.readAllowFromStore,
     subject: {
       stableId: senderId,
       aliases: { "sender-name": senderName },
@@ -158,29 +90,31 @@ export async function resolveMSTeamsSenderAccess(params: {
       id: conversationId,
       parentId: activity.channelData?.team?.id,
     },
-    accessGroups: params.cfg.accessGroups,
-    routeFacts: createMSTeamsRouteFacts({
-      isDirectMessage,
-      routeAllowed: channelGate.allowed,
-      routeAllowlistConfigured: channelGate.allowlistConfigured,
-      groupPolicy,
-    }),
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: isDirectMessage,
-    },
+    route: channelIngressRoutes(
+      !isDirectMessage &&
+        channelGate.allowlistConfigured && {
+          id: "msteams:team-channel",
+          kind: "nestedAllowlist",
+          allowed: channelGate.allowed,
+          precedence: 0,
+          matchId: "msteams-route",
+          ...(channelGate.allowed && groupPolicy === "allowlist"
+            ? {
+                senderPolicy: "deny-when-empty" as const,
+                senderAllowFromSource: "effective-group" as const,
+              }
+            : {}),
+        },
+    ),
+    dmPolicy,
+    groupPolicy,
     policy: {
-      dmPolicy,
-      groupPolicy,
       groupAllowFromFallbackToAllowFrom: true,
       mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
     },
     allowFrom: configuredDmAllowFrom,
     groupAllowFrom,
-    readStoreAllowFrom: pairing.readAllowFromStore,
     command: {
-      useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
       allowTextCommands: true,
       hasControlCommand: params.hasControlCommand === true,
       directGroupAllowFrom: isDirectMessage ? "effective" : "none",
@@ -188,15 +122,14 @@ export async function resolveMSTeamsSenderAccess(params: {
   });
   return {
     ...resolved,
-    msteamsCfg,
     pairing,
     isDirectMessage,
     conversationId,
     senderId,
     senderName,
+    msteamsCfg,
     dmPolicy,
     channelGate,
-    configuredDmAllowFrom,
     allowNameMatching,
     groupPolicy,
   };

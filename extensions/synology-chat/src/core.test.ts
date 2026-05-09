@@ -327,7 +327,7 @@ describe("synology-chat security helpers", () => {
     ).resolves.toMatchObject({
       senderAccess: {
         allowed: false,
-        ingressReasonCode: "dm_policy_not_allowlisted",
+        reasonCode: "dm_policy_not_allowlisted",
       },
     });
     await expect(
@@ -348,7 +348,7 @@ describe("synology-chat security helpers", () => {
     ).resolves.toMatchObject({
       senderAccess: {
         allowed: false,
-        ingressReasonCode: "dm_policy_disabled",
+        reasonCode: "dm_policy_disabled",
       },
     });
     await expect(
@@ -361,7 +361,7 @@ describe("synology-chat security helpers", () => {
     ).resolves.toMatchObject({
       senderAccess: {
         allowed: false,
-        ingressReasonCode: "dm_policy_not_allowlisted",
+        reasonCode: "dm_policy_not_allowlisted",
       },
     });
     await expect(
@@ -374,7 +374,7 @@ describe("synology-chat security helpers", () => {
     ).resolves.toMatchObject({
       senderAccess: {
         allowed: false,
-        ingressReasonCode: "dm_policy_not_allowlisted",
+        reasonCode: "dm_policy_not_allowlisted",
       },
     });
     await expect(

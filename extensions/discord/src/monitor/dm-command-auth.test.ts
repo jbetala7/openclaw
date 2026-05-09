@@ -5,6 +5,7 @@ import {
 } from "./dm-command-auth.js";
 
 const canViewDiscordGuildChannelMock = vi.hoisted(() => vi.fn());
+type DiscordDmIngressAccess = Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
 
 vi.mock("../send.permissions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.permissions.js")>();
@@ -13,6 +14,10 @@ vi.mock("../send.permissions.js", async (importOriginal) => {
     canViewDiscordGuildChannel: canViewDiscordGuildChannelMock,
   };
 });
+
+function dmCommandAuthorized(result: DiscordDmIngressAccess): boolean {
+  return result.senderAccess.allowed ? result.commandAccess.authorized : false;
+}
 
 describe("resolveDiscordTextCommandAccess", () => {
   const sender = {
@@ -30,7 +35,6 @@ describe("resolveDiscordTextCommandAccess", () => {
         memberAccessConfigured: false,
         memberAllowed: false,
         allowNameMatching: false,
-        useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
       }),
@@ -49,7 +53,6 @@ describe("resolveDiscordTextCommandAccess", () => {
         memberAccessConfigured: true,
         memberAllowed: true,
         allowNameMatching: false,
-        useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
       }),
@@ -68,7 +71,6 @@ describe("resolveDiscordTextCommandAccess", () => {
         memberAccessConfigured: true,
         memberAllowed: false,
         allowNameMatching: false,
-        useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
       }),
@@ -87,7 +89,7 @@ describe("resolveDiscordTextCommandAccess", () => {
         memberAccessConfigured: false,
         memberAllowed: false,
         allowNameMatching: false,
-        useAccessGroups: false,
+        cfg: { commands: { useAccessGroups: false } },
         allowTextCommands: true,
         hasControlCommand: true,
       }),
@@ -116,7 +118,6 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom,
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       readStoreAllowFrom: async () => [],
     });
   }
@@ -124,15 +125,15 @@ describe("resolveDiscordDmCommandAccess", () => {
   it("blocks open DMs without allowlist wildcard entries", async () => {
     const result = await resolveOpenDmAccess([]);
 
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.senderAccess.decision).toBe("block");
+    expect(dmCommandAuthorized(result)).toBe(false);
   });
 
   it("marks command auth true when sender is allowlisted", async () => {
     const result = await resolveOpenDmAccess(["discord:123"]);
 
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(dmCommandAuthorized(result)).toBe(true);
   });
 
   it("blocks open DMs when configured allowlist does not match", async () => {
@@ -142,13 +143,12 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: ["discord:999"],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("block");
-    expect(result.allowMatch.allowed).toBe(false);
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.senderAccess.decision).toBe("block");
+    expect(result.senderAccess.reasonCode).toBe("dm_policy_not_allowlisted");
+    expect(dmCommandAuthorized(result)).toBe(false);
   });
 
   it("returns pairing decision and unauthorized command auth for unknown senders", async () => {
@@ -158,12 +158,11 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: ["discord:456"],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("pairing");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.senderAccess.decision).toBe("pairing");
+    expect(dmCommandAuthorized(result)).toBe(false);
   });
 
   it("authorizes sender from pairing-store allowlist entries", async () => {
@@ -173,12 +172,11 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: [],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       readStoreAllowFrom: async () => ["discord:123"],
     });
 
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(dmCommandAuthorized(result)).toBe(true);
   });
 
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
@@ -190,7 +188,6 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: ["accessGroup:maintainers"],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       cfg: {
         accessGroups: {
           maintainers: {
@@ -210,8 +207,8 @@ describe("resolveDiscordDmCommandAccess", () => {
       "123",
       expect.objectContaining({ accountId: "default", token: "token" }),
     );
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(dmCommandAuthorized(result)).toBe(true);
   });
 
   it("authorizes allowlist DMs from a generic message sender access group", async () => {
@@ -221,7 +218,6 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: ["accessGroup:owners"],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       cfg: {
         accessGroups: {
           owners: {
@@ -237,8 +233,8 @@ describe("resolveDiscordDmCommandAccess", () => {
     });
 
     expect(canViewDiscordGuildChannelMock).not.toHaveBeenCalled();
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(dmCommandAuthorized(result)).toBe(true);
   });
 
   it("fails closed when a Discord channel audience access group lookup rejects", async () => {
@@ -250,7 +246,6 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: ["accessGroup:maintainers"],
       sender,
       allowNameMatching: false,
-      useAccessGroups: true,
       cfg: {
         accessGroups: {
           maintainers: {
@@ -263,8 +258,8 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.senderAccess.decision).toBe("block");
+    expect(dmCommandAuthorized(result)).toBe(false);
   });
 
   it("keeps open DM blocked without wildcard even when access groups are disabled", async () => {
@@ -274,11 +269,11 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: [],
       sender,
       allowNameMatching: false,
-      useAccessGroups: false,
+      cfg: { commands: { useAccessGroups: false } },
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.senderAccess.decision).toBe("block");
+    expect(dmCommandAuthorized(result)).toBe(false);
   });
 });

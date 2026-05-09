@@ -201,7 +201,6 @@ export async function preflightDiscordMessage(
   }
 
   const dmPolicy = params.dmPolicy;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
@@ -213,7 +212,6 @@ export async function preflightDiscordMessage(
       dmPolicy,
       resolvedAccountId,
       allowNameMatching,
-      useAccessGroups,
     });
     if (isPreflightAborted(params.abortSignal)) {
       return null;
@@ -491,7 +489,6 @@ export async function preflightDiscordMessage(
       memberAccessConfigured: hasAccessRestrictions,
       memberAllowed,
       allowNameMatching,
-      useAccessGroups,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
     });

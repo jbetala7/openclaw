@@ -1,12 +1,11 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { findChannelIngressSenderGate } from "openclaw/plugin-sdk/channel-ingress";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import {
   formatCommandArgMenuTitle,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   type CommandArgs,
   resolveNativeCommandSessionTargets,
@@ -435,12 +434,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const { allowFromLower: effectiveAllowFromLower } = await resolveSlackEffectiveAllowFrom(
-        ctx,
-        {
-          includePairingStore: isDirectMessage,
-        },
-      );
+      const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: isDirectMessage,
+      });
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
       // Keep this aligned with the Slack message path (message-handler/prepare.ts).
@@ -535,7 +531,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         eventKind: "slash-command",
         modeWhenAccessGroupsOff: "configured",
       });
-      const senderGate = findChannelIngressSenderGate(slashIngress.ingress, { isGroup: true });
+      const senderGate = slashIngress.senderAccess.gate;
       if (isRoom && senderGate?.allowed === false) {
         await respond({
           text: "You are not authorized to use this command here.",

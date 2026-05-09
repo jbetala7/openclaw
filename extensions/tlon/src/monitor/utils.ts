@@ -1,7 +1,6 @@
 import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-  type ResolvedChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeShip } from "../targets.js";
@@ -16,7 +15,6 @@ export interface ParsedCite {
   where?: string;
 }
 
-// Extract all cites from message content
 export function extractCites(content: unknown): ParsedCite[] {
   if (!content || !Array.isArray(content)) {
     return [];
@@ -91,12 +89,10 @@ export function isBotMentioned(
     return false;
   }
 
-  // Check for @all mention
   if (/@all\b/i.test(messageText)) {
     return true;
   }
 
-  // Check for ship mention
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
@@ -104,7 +100,6 @@ export function isBotMentioned(
     return true;
   }
 
-  // Check for nickname mention (case-insensitive, word boundary)
   if (nickname) {
     const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
@@ -116,10 +111,6 @@ export function isBotMentioned(
   return false;
 }
 
-/**
- * Strip bot ship mention from message text for command detection.
- * "~bot-ship /status" → "/status"
- */
 export function stripBotMention(messageText: string, botShipName: string): string {
   if (!messageText || !botShipName) {
     return messageText;
@@ -127,19 +118,19 @@ export function stripBotMention(messageText: string, botShipName: string): strin
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
-const tlonIngressIdentity = defineStableChannelIngressIdentity({
+const tlonIngressIdentity = {
   key: "sender-ship",
   normalize: normalizeShip,
   sensitivity: "pii",
   isWildcardEntry: () => false,
   entryIdPrefix: "tlon-entry",
-});
+} satisfies StableChannelIngressIdentityParams;
 
-export async function resolveTlonDmAccessWithIngress(
+export async function isDmAllowedWithIngress(
   senderShip: string,
   allowlist: string[] | undefined,
-): Promise<ResolvedChannelMessageIngress> {
-  return await resolveChannelMessageIngress({
+): Promise<boolean> {
+  const access = await resolveStableChannelMessageIngress({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,
@@ -148,72 +139,43 @@ export async function resolveTlonDmAccessWithIngress(
       kind: "direct",
       id: "direct",
     },
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: false,
-    },
-    policy: {
-      dmPolicy: "allowlist",
-      groupPolicy: "disabled",
-    },
+    dmPolicy: "allowlist",
     allowFrom: allowlist ?? [],
   });
-}
-
-export async function isDmAllowedWithIngress(
-  senderShip: string,
-  allowlist: string[] | undefined,
-): Promise<boolean> {
-  return (await resolveTlonDmAccessWithIngress(senderShip, allowlist)).senderAccess.allowed;
+  return access.senderAccess.allowed;
 }
 
 export async function resolveTlonCommandAuthorizationWithIngress(params: {
   senderShip: string;
   ownerShip: string | null | undefined;
   useAccessGroups: boolean;
-}): Promise<ResolvedChannelMessageIngress> {
+}) {
   const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
-  const resolved = await resolveChannelMessageIngress({
+  return await resolveStableChannelMessageIngress({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,
+    useAccessGroups: params.useAccessGroups,
     subject: { stableId: params.senderShip },
     conversation: {
       kind: "direct",
       id: "command",
     },
     event: {
-      kind: "message",
       authMode: "none",
       mayPair: false,
     },
-    policy: {
-      dmPolicy: "allowlist",
-      groupPolicy: "open",
-    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
     allowFrom: normalizedOwner ? [normalizedOwner] : [],
-    command: {
-      useAccessGroups: params.useAccessGroups,
-      allowTextCommands: false,
-      hasControlCommand: true,
-    },
+    command: {},
   });
-  return resolved;
 }
 
-/**
- * Check if a group invite from a ship should be auto-accepted.
- *
- * SECURITY: Fail-safe to deny. If allowlist is empty or undefined,
- * ALL invites are rejected - even if autoAcceptGroupInvites is enabled.
- * This prevents misconfigured bots from accepting malicious invites.
- */
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  // SECURITY: Fail-safe to deny when no allowlist configured
   if (!allowlist || allowlist.length === 0) {
     return false;
   }
@@ -221,10 +183,6 @@ export function isGroupInviteAllowed(
   return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
 }
 
-/**
- * Resolve quoted/cited content only after the caller has passed authorization.
- * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
- */
 export async function resolveAuthorizedMessageText(params: {
   rawText: string;
   content: unknown;

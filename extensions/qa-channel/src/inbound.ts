@@ -1,10 +1,6 @@
-import { mapChannelIngressDecisionToTurnAdmission } from "openclaw/plugin-sdk/channel-ingress";
-import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   buildAgentMediaPayload,
   saveMediaBuffer,
@@ -13,11 +9,6 @@ import {
 import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
-
-const qaIngressIdentity = defineStableChannelIngressIdentity({
-  key: "sender",
-  entryIdPrefix: "qa-entry",
-});
 
 export function isHttpMediaUrl(value: string): boolean {
   try {
@@ -91,7 +82,7 @@ export async function handleQaInbound(params: {
     conversationId: inbound.conversation.id,
     threadId: inbound.threadId,
   });
-  const route = runtime.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -104,6 +95,8 @@ export async function handleQaInbound(params: {
             : "channel",
       id: target,
     },
+    runtime: runtime.channel,
+    sessionStore: params.config.session?.store,
   });
   const isGroup = inbound.conversation.kind !== "direct";
   const wasMentioned = isGroup
@@ -122,10 +115,11 @@ export async function handleQaInbound(params: {
         target,
       })
     : undefined;
-  const access = await resolveChannelMessageIngress({
+  const access = await resolveStableChannelMessageIngress({
     channelId: params.channelId,
     accountId: params.account.accountId,
-    identity: qaIngressIdentity,
+    identity: { key: "sender", entryIdPrefix: "qa-entry" },
+    groupAllowFromFallbackToAllowFrom: true,
     subject: { stableId: inbound.senderId },
     conversation: {
       kind: inbound.conversation.kind,
@@ -133,21 +127,15 @@ export async function handleQaInbound(params: {
       threadId: inbound.threadId,
       title: inbound.conversation.title,
     },
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: false,
-    },
     mentionFacts: isGroup
       ? {
           canDetectMention: true,
           wasMentioned: wasMentioned ?? false,
         }
       : undefined,
+    dmPolicy: "open",
+    groupPolicy: params.account.config.groupPolicy ?? "open",
     policy: {
-      dmPolicy: "open",
-      groupPolicy: params.account.config.groupPolicy ?? "open",
-      groupAllowFromFallbackToAllowFrom: true,
       activation: isGroup
         ? {
             requireMention: groupConfig?.requireMention ?? false,
@@ -158,23 +146,13 @@ export async function handleQaInbound(params: {
     allowFrom: params.account.config.allowFrom,
     groupAllowFrom: params.account.config.groupAllowFrom,
   });
-  const admission = mapChannelIngressDecisionToTurnAdmission(access.ingress, { kind: "none" });
-  if (admission.kind !== "dispatch") {
+  if (access.ingress.admission !== "dispatch") {
     return;
   }
-  const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
-    agentId: route.agentId,
-  });
-  const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = runtime.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: params.channelLabel,
     from: inbound.senderName || inbound.senderId,
     timestamp: inbound.timestamp,
-    previousTimestamp,
-    envelope: runtime.channel.reply.resolveEnvelopeFormatOptions(params.config as OpenClawConfig),
     body: inbound.text,
   });
   const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
@@ -213,57 +191,47 @@ export async function handleQaInbound(params: {
     Timestamp: inbound.timestamp,
     OriginatingChannel: params.channelId,
     OriginatingTo: target,
-    CommandAuthorized: access.accessFacts.commands?.authorized ?? true,
+    CommandAuthorized: true,
     ...mediaPayload,
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+  await runtime.channel.turn.runAssembled({
     cfg: params.config as OpenClawConfig,
+    channel: params.channelId,
+    accountId: params.account.accountId,
     agentId: route.agentId,
-    channel: params.channelId,
-    accountId: params.account.accountId,
-  });
-
-  await runtime.channel.turn.runPrepared({
-    channel: params.channelId,
-    accountId: params.account.accountId,
     routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
     recordInboundSession: runtime.channel.session.recordInboundSession,
-    runDispatch: async () =>
-      await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: params.config as OpenClawConfig,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: async (payload) => {
-            const text =
-              payload && typeof payload === "object" && "text" in payload
-                ? ((payload as { text?: string }).text ?? "")
-                : "";
-            if (!text.trim()) {
-              return;
-            }
-            await sendQaBusMessage({
-              baseUrl: params.account.baseUrl,
-              accountId: params.account.accountId,
-              to: target,
-              text,
-              senderId: params.account.botUserId,
-              senderName: params.account.botDisplayName,
-              threadId: inbound.threadId,
-              replyToId: inbound.id,
-            });
-          },
-          onError: (error) => {
-            throw error instanceof Error
-              ? error
-              : new Error(`qa-channel dispatch failed: ${String(error)}`);
-          },
-        },
-        replyOptions: { onModelSelected },
-      }),
+    dispatchReplyWithBufferedBlockDispatcher:
+      runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      deliver: async (payload) => {
+        const text =
+          payload && typeof payload === "object" && "text" in payload
+            ? ((payload as { text?: string }).text ?? "")
+            : "";
+        if (!text.trim()) {
+          return;
+        }
+        await sendQaBusMessage({
+          baseUrl: params.account.baseUrl,
+          accountId: params.account.accountId,
+          to: target,
+          text,
+          senderId: params.account.botUserId,
+          senderName: params.account.botDisplayName,
+          threadId: inbound.threadId,
+          replyToId: inbound.id,
+        });
+      },
+      onError: (error) => {
+        throw error instanceof Error
+          ? error
+          : new Error(`qa-channel dispatch failed: ${String(error)}`);
+      },
+    },
     record: {
       onRecordError: (error) => {
         throw error instanceof Error

@@ -9,11 +9,15 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
+import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -31,8 +35,8 @@ import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
   normalizeIMessageHandle,
+  parseIMessageAllowTarget,
 } from "../targets.js";
-import { resolveIMessageIngressAccess } from "./access-policy.js";
 import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
@@ -42,6 +46,61 @@ type IMessageReplyContext = {
   body: string;
   sender?: string;
 };
+
+const normalizeNonEmpty = (value: string) => value.trim() || null;
+
+const imessageIngressIdentity = defineStableChannelIngressIdentity({
+  key: "imessage-sender",
+  normalizeEntry: normalizeIMessageHandleEntry,
+  normalizeSubject: normalizeIMessageHandle,
+  sensitivity: "pii",
+  aliases: (
+    [
+      ["imessage-chat-id", "plugin:imessage-chat-id", normalizeIMessageChatIdEntry],
+      ["imessage-chat-guid", "plugin:imessage-chat-guid", normalizeIMessageChatGuidEntry],
+      [
+        "imessage-chat-identifier",
+        "plugin:imessage-chat-identifier",
+        normalizeIMessageChatIdentifierEntry,
+      ],
+    ] as const
+  ).map(([key, kind, normalizeEntry]) => ({
+    key,
+    kind,
+    normalizeEntry,
+    normalizeSubject: normalizeNonEmpty,
+    sensitivity: "pii",
+  })),
+  resolveEntryId: ({ entryIndex }) => `imessage-entry-${entryIndex + 1}`,
+});
+
+function normalizeIMessageHandleEntry(entry: string): string | null {
+  const parsed = parseIMessageAllowTarget(entry.trim());
+  return parsed.kind === "handle" ? normalizeIMessageHandle(parsed.handle) : null;
+}
+
+function normalizeIMessageChatIdEntry(entry: string): string | null {
+  const parsed = parseIMessageAllowTarget(entry.trim());
+  return parsed.kind === "chat_id" ? String(parsed.chatId) : null;
+}
+
+function normalizeIMessageChatGuidEntry(entry: string): string | null {
+  const parsed = parseIMessageAllowTarget(entry.trim());
+  return parsed.kind === "chat_guid" ? parsed.chatGuid.trim() || null : null;
+}
+
+function normalizeIMessageChatIdentifierEntry(entry: string): string | null {
+  const parsed = parseIMessageAllowTarget(entry.trim());
+  return parsed.kind === "chat_identifier" ? parsed.chatIdentifier.trim() || null : null;
+}
+
+function normalizeDmPolicy(policy: string): DmPolicy {
+  return policy === "open" || policy === "allowlist" || policy === "disabled" ? policy : "pairing";
+}
+
+function normalizeGroupPolicy(policy: string): GroupPolicy {
+  return policy === "open" || policy === "disabled" ? policy : "allowlist";
+}
 
 function normalizeReplyField(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -307,44 +366,61 @@ export async function resolveIMessageInboundDecision(params: {
 
   const groupId = isGroup ? groupIdCandidate : undefined;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
-  const accessDecision = await resolveIMessageIngressAccess({
-    cfg: params.cfg,
+  const accessDecision = await createChannelIngressResolver({
+    channelId: "imessage",
     accountId: params.accountId,
-    isGroup,
-    sender,
-    chatId,
-    chatGuid,
-    chatIdentifier,
+    identity: imessageIngressIdentity,
+    cfg: params.cfg,
+    readStoreAllowFrom: async () => params.storeAllowFrom,
+  }).message({
+    subject: {
+      stableId: sender,
+      aliases: {
+        ...(chatId != null ? { "imessage-chat-id": String(chatId) } : {}),
+        ...(chatGuid ? { "imessage-chat-guid": chatGuid } : {}),
+        ...(chatIdentifier ? { "imessage-chat-identifier": chatIdentifier } : {}),
+      },
+    },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup
+        ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
+        : normalizeIMessageHandle(sender),
+    },
+    dmPolicy: normalizeDmPolicy(params.dmPolicy),
+    groupPolicy: normalizeGroupPolicy(params.groupPolicy),
+    policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: params.allowFrom,
     groupAllowFrom: params.groupAllowFrom,
-    storeAllowFrom: params.storeAllowFrom,
-    dmPolicy: params.dmPolicy,
-    groupPolicy: params.groupPolicy,
-    hasControlCommand: hasControlCommandInMessage,
+    command: {
+      allowTextCommands: isGroup,
+      hasControlCommand: hasControlCommandInMessage,
+      directGroupAllowFrom: "effective",
+    },
   });
   const { commandAccess, senderAccess } = accessDecision;
   const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
 
   if (senderAccess.decision !== "allow") {
     if (isGroup) {
-      if (senderAccess.ingressReasonCode === "group_policy_disabled") {
+      if (senderAccess.reasonCode === "group_policy_disabled") {
         params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
-      if (senderAccess.ingressReasonCode === "group_policy_empty_allowlist") {
+      if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
         params.logVerbose?.(
           "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
         );
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
-      if (senderAccess.ingressReasonCode === "group_policy_not_allowlisted") {
+      if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
         params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
-      params.logVerbose?.(`Blocked iMessage group message (${senderAccess.reason})`);
-      return { kind: "drop", reason: senderAccess.reason };
+      params.logVerbose?.(`Blocked iMessage group message (${senderAccess.reasonCode})`);
+      return { kind: "drop", reason: senderAccess.reasonCode };
     }
-    if (senderAccess.ingressReasonCode === "dm_policy_disabled") {
+    if (senderAccess.reasonCode === "dm_policy_disabled") {
       return { kind: "drop", reason: "dmPolicy disabled" };
     }
     if (senderAccess.decision === "pairing") {

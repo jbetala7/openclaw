@@ -1,12 +1,14 @@
-import { resolveChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeDmAllowFromWithStore, type NormalizedAllowFrom } from "./bot-access.js";
 import {
-  createTelegramIngressSubject,
-  TELEGRAM_CHANNEL_ID,
-  telegramIngressIdentity,
-} from "./ingress.js";
+  expandAllowFromWithAccessGroups,
+  parseAccessGroupAllowFromEntry,
+} from "openclaw/plugin-sdk/security-runtime";
+import {
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+  type NormalizedAllowFrom,
+} from "./bot-access.js";
 
 export async function expandTelegramAllowFromWithAccessGroups(params: {
   cfg?: OpenClawConfig;
@@ -16,46 +18,26 @@ export async function expandTelegramAllowFromWithAccessGroups(params: {
 }): Promise<string[]> {
   const allowFrom = (params.allowFrom ?? []).map(String);
   const senderId = params.senderId?.trim() ?? "";
-  if (
-    !params.cfg ||
-    !senderId ||
-    !allowFrom.some((entry) => parseAccessGroupAllowFromEntry(entry))
-  ) {
-    return allowFrom;
-  }
-  const expanded = (
-    await resolveChannelMessageIngress({
-      channelId: TELEGRAM_CHANNEL_ID,
-      accountId: params.accountId ?? "default",
-      identity: telegramIngressIdentity,
-      subject: createTelegramIngressSubject(senderId),
-      conversation: {
-        kind: "direct",
-        id: senderId,
-      },
-      event: {
-        kind: "message",
-        authMode: "inbound",
-        mayPair: false,
-      },
-      accessGroups: params.cfg.accessGroups,
-      policy: {
-        dmPolicy: "allowlist",
-        groupPolicy: "disabled",
-      },
-      allowFrom,
-    })
-  ).senderAccess.effectiveAllowFrom;
-  const originalEntries = new Set(allowFrom);
-  const matched = !originalEntries.has(senderId) && expanded.includes(senderId);
-  return matched
-    ? Array.from(
-        new Set([
-          ...allowFrom.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null),
+  const expanded =
+    params.cfg && senderId
+      ? await expandAllowFromWithAccessGroups({
+          cfg: params.cfg,
+          allowFrom,
+          channel: "telegram",
+          accountId: params.accountId ?? "default",
           senderId,
-        ]),
-      )
-    : allowFrom;
+          isSenderAllowed: (candidateSenderId, allowEntries) =>
+            isSenderAllowed({
+              allow: normalizeAllowFrom(allowEntries),
+              senderId: candidateSenderId,
+            }),
+        })
+      : allowFrom;
+  const originalEntries = new Set(allowFrom);
+  const matched = expanded.some((entry) => !originalEntries.has(entry));
+  return matched
+    ? expanded.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null)
+    : expanded;
 }
 
 export async function resolveTelegramDmAllow(params: {

@@ -11,18 +11,27 @@ import type {
   ResolvedIngressAllowlist,
 } from "./types.js";
 
-function gate(params: AccessGraphGate): AccessGraphGate {
-  return params;
-}
-
-function gateWithAllowlist(
-  params: AccessGraphGate & { allowlistSource: ResolvedIngressAllowlist },
-): AccessGraphGate {
-  const { allowlistSource, ...gateParams } = params;
-  return gate({
-    ...gateParams,
-    allowlist: redactedAllowlistDiagnostics(allowlistSource, gateParams.reasonCode),
-  });
+function senderGate(params: {
+  id: "sender:dm" | "sender:group";
+  kind: "dmSender" | "groupSender";
+  effect: AccessGraphGate["effect"];
+  allowed: boolean;
+  reasonCode: AccessGraphGate["reasonCode"];
+  match: AccessGraphGate["match"];
+  policy: ChannelIngressPolicyInput["dmPolicy"] | ChannelIngressPolicyInput["groupPolicy"];
+  allowlistSource: ResolvedIngressAllowlist;
+}): AccessGraphGate {
+  return {
+    id: params.id,
+    phase: "sender",
+    kind: params.kind,
+    effect: params.effect,
+    allowed: params.allowed,
+    reasonCode: params.reasonCode,
+    match: params.match,
+    sender: { policy: params.policy },
+    allowlist: redactedAllowlistDiagnostics(params.allowlistSource, params.reasonCode),
+  };
 }
 
 export function senderGateForDirect(params: {
@@ -34,112 +43,64 @@ export function senderGateForDirect(params: {
     params.state.allowlists.pairingStore,
     params.policy,
   );
-  if (params.policy.dmPolicy === "disabled") {
-    return gateWithAllowlist({
+  const base = {
+    policy: params.policy.dmPolicy,
+    allowlistSource: dm,
+    match: dm.match,
+  };
+  const allow = (reasonCode: AccessGraphGate["reasonCode"]) =>
+    senderGate({
       id: "sender:dm",
-      phase: "sender",
       kind: "dmSender",
+      ...base,
+      effect: "allow",
+      allowed: true,
+      reasonCode,
+    });
+  const block = (reasonCode: AccessGraphGate["reasonCode"]) =>
+    senderGate({
+      id: "sender:dm",
+      kind: "dmSender",
+      ...base,
       effect: "block-dispatch",
       allowed: false,
-      reasonCode: "dm_policy_disabled",
-      match: dm.match,
-      sender: { policy: params.policy.dmPolicy },
-      allowlistSource: dm,
+      reasonCode,
     });
+  if (params.policy.dmPolicy === "disabled") {
+    return block("dm_policy_disabled");
   }
   if (params.policy.dmPolicy === "open") {
     if (dm.hasWildcard) {
-      return gateWithAllowlist({
-        id: "sender:dm",
-        phase: "sender",
-        kind: "dmSender",
-        effect: "allow",
-        allowed: true,
-        reasonCode: "dm_policy_open",
-        match: dm.match,
-        sender: { policy: params.policy.dmPolicy },
-        allowlistSource: dm,
-      });
+      return allow("dm_policy_open");
     }
     if (dm.match.matched) {
-      return gateWithAllowlist({
-        id: "sender:dm",
-        phase: "sender",
-        kind: "dmSender",
-        effect: "allow",
-        allowed: true,
-        reasonCode: "dm_policy_allowlisted",
-        match: dm.match,
-        sender: { policy: params.policy.dmPolicy },
-        allowlistSource: dm,
-      });
+      return allow("dm_policy_allowlisted");
     }
-    return gateWithAllowlist({
-      id: "sender:dm",
-      phase: "sender",
-      kind: "dmSender",
-      effect: "block-dispatch",
-      allowed: false,
-      reasonCode: "dm_policy_not_allowlisted",
-      match: dm.match,
-      sender: { policy: params.policy.dmPolicy },
-      allowlistSource: dm,
-    });
+    return block("dm_policy_not_allowlisted");
   }
   if (dm.match.matched) {
-    return gateWithAllowlist({
-      id: "sender:dm",
-      phase: "sender",
-      kind: "dmSender",
-      effect: "allow",
-      allowed: true,
-      reasonCode: "dm_policy_allowlisted",
-      match: dm.match,
-      sender: { policy: params.policy.dmPolicy },
-      allowlistSource: dm,
-    });
+    return allow("dm_policy_allowlisted");
   }
   if (params.policy.dmPolicy === "pairing" && pairingStore.match.matched) {
-    return gateWithAllowlist({
+    return senderGate({
       id: "sender:dm",
-      phase: "sender",
       kind: "dmSender",
       effect: "allow",
       allowed: true,
       reasonCode: "dm_policy_allowlisted",
       match: pairingStore.match,
-      sender: { policy: params.policy.dmPolicy },
+      policy: params.policy.dmPolicy,
       allowlistSource: pairingStore,
     });
   }
   if (params.policy.dmPolicy === "pairing" && params.state.event.mayPair) {
-    return gateWithAllowlist({
-      id: "sender:dm",
-      phase: "sender",
-      kind: "dmSender",
-      effect: "block-dispatch",
-      allowed: false,
-      reasonCode: "dm_policy_pairing_required",
-      match: dm.match,
-      sender: { policy: params.policy.dmPolicy },
-      allowlistSource: dm,
-    });
+    return block("dm_policy_pairing_required");
   }
   const reasonCode =
     params.policy.dmPolicy === "pairing"
       ? "event_pairing_not_allowed"
       : (allowlistFailureReason(dm) ?? "dm_policy_not_allowlisted");
-  return gateWithAllowlist({
-    id: "sender:dm",
-    phase: "sender",
-    kind: "dmSender",
-    effect: "block-dispatch",
-    allowed: false,
-    reasonCode,
-    match: dm.match,
-    sender: { policy: params.policy.dmPolicy },
-    allowlistSource: dm,
-  });
+  return block(reasonCode);
 }
 
 export function senderGateForGroup(params: {
@@ -147,69 +108,42 @@ export function senderGateForGroup(params: {
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
   const group = effectiveGroupSenderAllowlist(params);
-  if (params.policy.groupPolicy === "disabled") {
-    return gateWithAllowlist({
+  const base = {
+    policy: params.policy.groupPolicy,
+    allowlistSource: group,
+    match: group.match,
+  };
+  const allow = (reasonCode: AccessGraphGate["reasonCode"]) =>
+    senderGate({
       id: "sender:group",
-      phase: "sender",
       kind: "groupSender",
+      ...base,
+      effect: "allow",
+      allowed: true,
+      reasonCode,
+    });
+  const block = (reasonCode: AccessGraphGate["reasonCode"]) =>
+    senderGate({
+      id: "sender:group",
+      kind: "groupSender",
+      ...base,
       effect: "block-dispatch",
       allowed: false,
-      reasonCode: "group_policy_disabled",
-      match: group.match,
-      sender: { policy: params.policy.groupPolicy },
-      allowlistSource: group,
+      reasonCode,
     });
+  if (params.policy.groupPolicy === "disabled") {
+    return block("group_policy_disabled");
   }
   if (params.policy.groupPolicy === "open") {
-    return gateWithAllowlist({
-      id: "sender:group",
-      phase: "sender",
-      kind: "groupSender",
-      effect: "allow",
-      allowed: true,
-      reasonCode: "group_policy_open",
-      match: group.match,
-      sender: { policy: params.policy.groupPolicy },
-      allowlistSource: group,
-    });
+    return allow("group_policy_open");
   }
   if (!group.hasConfiguredEntries) {
-    return gateWithAllowlist({
-      id: "sender:group",
-      phase: "sender",
-      kind: "groupSender",
-      effect: "block-dispatch",
-      allowed: false,
-      reasonCode: "group_policy_empty_allowlist",
-      match: group.match,
-      sender: { policy: params.policy.groupPolicy },
-      allowlistSource: group,
-    });
+    return block("group_policy_empty_allowlist");
   }
   if (group.match.matched) {
-    return gateWithAllowlist({
-      id: "sender:group",
-      phase: "sender",
-      kind: "groupSender",
-      effect: "allow",
-      allowed: true,
-      reasonCode: "group_policy_allowed",
-      match: group.match,
-      sender: { policy: params.policy.groupPolicy },
-      allowlistSource: group,
-    });
+    return allow("group_policy_allowed");
   }
-  return gateWithAllowlist({
-    id: "sender:group",
-    phase: "sender",
-    kind: "groupSender",
-    effect: "block-dispatch",
-    allowed: false,
-    reasonCode: allowlistFailureReason(group) ?? "group_policy_not_allowlisted",
-    match: group.match,
-    sender: { policy: params.policy.groupPolicy },
-    allowlistSource: group,
-  });
+  return block(allowlistFailureReason(group) ?? "group_policy_not_allowlisted");
 }
 
 export function applyEventAuthModeToSenderGate(params: {

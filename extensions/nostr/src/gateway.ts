@@ -1,7 +1,6 @@
 import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-  type ResolvedChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -63,64 +62,13 @@ function normalizeNostrSenderPubkey(value: string): string | null {
   }
 }
 
-const nostrIngressIdentity = defineStableChannelIngressIdentity({
+const nostrIngressIdentity = {
   key: "nostr-pubkey",
   normalizeEntry: normalizeNostrAllowEntry,
   normalizeSubject: normalizeNostrSenderPubkey,
   sensitivity: "pii",
   entryIdPrefix: "nostr-entry",
-});
-
-async function resolveNostrDirectAccess(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom: Array<string | number> | undefined;
-  senderPubkey: string;
-  rawBody: string;
-  runtime: {
-    shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
-  };
-}): Promise<ResolvedChannelMessageIngress & { shouldComputeAuth: boolean }> {
-  const shouldComputeAuth = params.runtime.shouldComputeCommandAuthorized(
-    params.rawBody,
-    params.cfg,
-  );
-  const resolved = await resolveChannelMessageIngress({
-    channelId: "nostr",
-    accountId: params.accountId,
-    identity: nostrIngressIdentity,
-    subject: { stableId: params.senderPubkey },
-    conversation: {
-      kind: "direct",
-      id: params.senderPubkey,
-    },
-    accessGroups: params.cfg.accessGroups,
-    event: {
-      kind: "message",
-      authMode: "inbound",
-      mayPair: true,
-    },
-    policy: {
-      dmPolicy: params.dmPolicy,
-      groupPolicy: "disabled",
-    },
-    allowFrom: params.allowFrom,
-    useDefaultPairingStore: true,
-    command: shouldComputeAuth
-      ? {
-          useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
-          allowTextCommands: false,
-          hasControlCommand: true,
-          modeWhenAccessGroupsOff: "configured",
-        }
-      : undefined,
-  });
-  return {
-    ...resolved,
-    shouldComputeAuth,
-  };
-}
+} satisfies StableChannelIngressIdentityParams;
 
 export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   const account = ctx.account;
@@ -141,16 +89,24 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     accountId: account.accountId,
   });
   const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
-    await resolveNostrDirectAccess({
-      cfg: ctx.cfg,
+    await resolveStableChannelMessageIngress({
+      channelId: "nostr",
       accountId: account.accountId,
+      identity: nostrIngressIdentity,
+      cfg: ctx.cfg,
+      useDefaultPairingStore: true,
+      subject: { stableId: senderPubkey },
+      conversation: {
+        kind: "direct",
+        id: senderPubkey,
+      },
       dmPolicy: account.config.dmPolicy ?? "pairing",
       allowFrom: account.config.allowFrom,
-      senderPubkey,
-      rawBody,
-      runtime: {
-        shouldComputeCommandAuthorized: runtime.channel.commands.shouldComputeCommandAuthorized,
-      },
+      command: runtime.channel.commands.shouldComputeCommandAuthorized(rawBody, ctx.cfg)
+        ? {
+            modeWhenAccessGroupsOff: "configured",
+          }
+        : undefined,
     });
 
   let busHandle: NostrBusHandle | null = null;
@@ -182,7 +138,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       return "pairing";
     }
     ctx.log?.debug?.(
-      `[${account.accountId}] blocked Nostr sender ${input.senderId} (${resolved.senderAccess.reason})`,
+      `[${account.accountId}] blocked Nostr sender ${input.senderId} (${resolved.senderAccess.reasonCode})`,
     );
     return "block";
   };
@@ -197,7 +153,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
       if (resolvedAccess.senderAccess.decision !== "allow") {
         ctx.log?.warn?.(
-          `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${resolvedAccess.senderAccess.reason})`,
+          `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${resolvedAccess.senderAccess.reasonCode})`,
         );
         return;
       }

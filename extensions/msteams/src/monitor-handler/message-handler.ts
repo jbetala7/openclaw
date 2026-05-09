@@ -86,6 +86,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   }
   return "";
 }
+
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
@@ -99,6 +100,38 @@ import {
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
+
+function formatMSTeamsSenderReason(params: {
+  reasonCode: string;
+  dmPolicy?: string;
+  groupPolicy?: string;
+}): string {
+  switch (params.reasonCode) {
+    case "dm_policy_open":
+      return "dmPolicy=open";
+    case "dm_policy_disabled":
+      return "dmPolicy=disabled";
+    case "dm_policy_pairing_required":
+      return "dmPolicy=pairing (not allowlisted)";
+    case "dm_policy_allowlisted":
+      return `dmPolicy=${params.dmPolicy ?? "allowlist"} (allowlisted)`;
+    case "dm_policy_not_allowlisted":
+      return `dmPolicy=${params.dmPolicy ?? "allowlist"} (not allowlisted)`;
+    case "group_policy_disabled":
+      return "groupPolicy=disabled";
+    case "group_policy_empty_allowlist":
+    case "route_sender_empty":
+      return "groupPolicy=allowlist (empty allowlist)";
+    case "group_policy_not_allowlisted":
+      return "groupPolicy=allowlist (not allowlisted)";
+    case "group_policy_open":
+      return "groupPolicy=open";
+    case "group_policy_allowed":
+      return `groupPolicy=${params.groupPolicy ?? "allowlist"}`;
+    default:
+      return params.reasonCode;
+  }
+}
 
 function buildStoredConversationReference(params: {
   activity: MSTeamsTurnContext["activity"];
@@ -265,14 +298,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       activity,
       hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
     });
-    const senderGroupAccess = senderAccess.groupAccess;
     const commandAuthorized = commandAccess.requested ? commandAccess.authorized : undefined;
     const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;
     const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
     const isChannel = conversationType === "channel";
 
     if (isDirectMessage && msteamsCfg && senderAccess.decision !== "allow") {
-      if (senderAccess.reason === "dmPolicy=disabled") {
+      if (senderAccess.reasonCode === "dm_policy_disabled") {
         log.info("dropping dm (dms disabled)", {
           sender: senderId,
           label: senderName,
@@ -312,7 +344,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         sender: senderId,
         label: senderName,
         dmPolicy,
-        reason: senderAccess.reason,
+        reason: formatMSTeamsSenderReason({
+          reasonCode: senderAccess.reasonCode,
+          dmPolicy,
+          groupPolicy,
+        }),
         allowlistMatch: formatAllowlistMatchMeta(allowMatch),
       });
       return;
@@ -337,7 +373,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
 
-      if (senderGroupAccess?.allowed === false && senderGroupAccess.reason === "disabled") {
+      if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_disabled") {
         log.info("dropping group message (groupPolicy: disabled)", {
           conversationId,
         });
@@ -346,7 +382,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
         return;
       }
-      if (senderGroupAccess?.allowed === false && senderGroupAccess.reason === "empty_allowlist") {
+      if (
+        !senderAccess.allowed &&
+        (senderAccess.reasonCode === "group_policy_empty_allowlist" ||
+          senderAccess.reasonCode === "route_sender_empty")
+      ) {
         log.info("dropping group message (groupPolicy: allowlist, no allowlist)", {
           conversationId,
         });
@@ -355,10 +395,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
         return;
       }
-      if (
-        senderGroupAccess?.allowed === false &&
-        senderGroupAccess.reason === "sender_not_allowlisted"
-      ) {
+      if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_not_allowlisted") {
         const allowMatch = resolveMSTeamsAllowlistMatch({
           allowFrom: effectiveGroupAllowFrom,
           senderId,

@@ -43,7 +43,6 @@ async function ensureDmComponentAuthorized(params: {
       tag: formatDiscordUserTag(user),
     },
     allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
-    useAccessGroups: ctx.cfg.commands?.useAccessGroups !== false,
     cfg: ctx.cfg,
     token: ctx.token,
     readStoreAllowFrom: async ({ accountId, dmPolicy }) =>
@@ -54,10 +53,10 @@ async function ensureDmComponentAuthorized(params: {
       }),
     eventKind: "button",
   });
-  if (access.decision === "allow") {
+  if (access.senderAccess.decision === "allow") {
     return true;
   }
-  if (access.decision !== "pairing") {
+  if (access.senderAccess.decision !== "pairing") {
     logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
     await replySilently(interaction, {
       content: `You are not authorized to use this ${componentLabel}.`,

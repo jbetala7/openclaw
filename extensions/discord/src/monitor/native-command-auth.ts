@@ -1,3 +1,4 @@
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -14,10 +15,7 @@ import {
   resolveDiscordOwnerAccess,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import {
-  resolveDiscordCommandAuthorizersWithIngress,
-  resolveDiscordDmCommandAccess,
-} from "./dm-command-auth.js";
+import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import type { DiscordConfig } from "./native-command.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
@@ -120,9 +118,7 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   const authorizers = params.commandsAllowFromAccess.configured
     ? [commandAllowlistAuthorizer]
     : fallbackAuthorizers;
-  return await resolveDiscordCommandAuthorizersWithIngress({
-    accountId: params.accountId,
-    sender: params.sender,
+  return resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups: params.useAccessGroups,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
@@ -275,11 +271,10 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
         tag: sender.tag,
       },
       allowNameMatching,
-      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    if (dmAccess.decision !== "allow") {
+    if (dmAccess.senderAccess.decision !== "allow") {
       return false;
     }
   }

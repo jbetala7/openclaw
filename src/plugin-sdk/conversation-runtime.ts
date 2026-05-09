@@ -109,4 +109,4 @@ export {
   resolvePluginConversationBindingApproval,
   toPluginConversationBinding,
 } from "../plugins/conversation-binding.js";
-export { resolvePinnedMainDmOwnerFromAllowlist } from "../channels/message-access/legacy-policy.js";
+export { resolvePinnedMainDmOwnerFromAllowlist } from "./channel-access-compat.js";

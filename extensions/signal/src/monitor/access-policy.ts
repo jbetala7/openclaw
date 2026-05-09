@@ -1,9 +1,9 @@
 import {
+  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
-  resolveChannelMessageIngressBundle,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import type { AccessGroupsConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { looksLikeUuid, normalizeSignalAllowRecipient, type SignalSender } from "../identity.js";
 
@@ -62,28 +62,27 @@ function normalizeSignalPhoneEntry(entry: string): string | null {
 const signalIngressIdentity = defineStableChannelIngressIdentity({
   key: "stable",
   normalizeEntry: () => null,
-  aliases: [
-    {
-      key: "phone",
-      kind: "phone",
-      normalizeEntry: normalizeSignalPhoneEntry,
-      normalizeSubject: (value) => value,
-      sensitivity: "pii",
-    },
-    {
-      key: "uuid",
-      kind: SIGNAL_UUID_KIND,
-      normalizeEntry: normalizeSignalUuidEntry,
-      normalizeSubject: (value) => value,
-      sensitivity: "pii",
-    },
-    {
-      key: "group",
-      kind: SIGNAL_GROUP_KIND,
-      normalizeEntry: normalizeSignalGroupEntry,
-      normalizeSubject: (value) => value,
-    },
-  ],
+  aliases: (
+    [
+      {
+        key: "phone",
+        kind: "phone",
+        normalizeEntry: normalizeSignalPhoneEntry,
+        sensitivity: "pii",
+      },
+      {
+        key: "uuid",
+        kind: SIGNAL_UUID_KIND,
+        normalizeEntry: normalizeSignalUuidEntry,
+        sensitivity: "pii",
+      },
+      {
+        key: "group",
+        kind: SIGNAL_GROUP_KIND,
+        normalizeEntry: normalizeSignalGroupEntry,
+      },
+    ] as const
+  ).map((alias) => ({ ...alias, normalizeSubject: (value: string) => value })),
   isWildcardEntry: (entry) => entry.trim() === "*",
   resolveEntryId({ entryIndex, fieldKey }) {
     return `entry-${entryIndex + 1}:${fieldKey}`;
@@ -108,89 +107,44 @@ export async function resolveSignalAccessState(params: {
   groupAllowFrom: string[];
   sender: SignalSender;
   groupId?: string;
-  accessGroups?: AccessGroupsConfig;
+  isGroup?: boolean;
+  cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
   hasControlCommand?: boolean;
-  useAccessGroups?: boolean;
   readStoreAllowFrom?: () => Promise<string[]>;
 }) {
+  const isGroup = params.isGroup ?? params.groupId != null;
   const command =
     params.hasControlCommand === true
       ? {
-          useAccessGroups: params.useAccessGroups !== false,
           allowTextCommands: true,
-          hasControlCommand: true,
           directGroupAllowFrom: "effective" as const,
         }
       : undefined;
-  const { direct: directResolved, group: groupResolved } = await resolveChannelMessageIngressBundle(
-    {
-      direct: {
-        channelId: "signal",
-        accountId: params.accountId,
-        identity: signalIngressIdentity,
-        subject: signalSubjectInput({ sender: params.sender }),
-        conversation: {
-          kind: "direct",
-          id: params.sender.raw,
-        },
-        accessGroups: params.accessGroups,
-        event: {
-          kind: "message",
-          authMode: "inbound",
-          mayPair: true,
-        },
-        policy: {
-          dmPolicy: params.dmPolicy,
-          groupPolicy: params.groupPolicy,
-          groupAllowFromFallbackToAllowFrom: true,
-        },
-        allowFrom: params.allowFrom,
-        groupAllowFrom: params.groupAllowFrom,
-        readStoreAllowFrom: params.readStoreAllowFrom,
-        useDefaultPairingStore: params.readStoreAllowFrom == null,
-        command,
-      },
-      group: {
-        channelId: "signal",
-        accountId: params.accountId,
-        identity: signalIngressIdentity,
-        subject: signalSubjectInput({
-          sender: params.sender,
-          groupId: params.groupId,
-        }),
-        conversation: {
-          kind: "group",
-          id: params.groupId ?? "unknown",
-        },
-        accessGroups: params.accessGroups,
-        event: {
-          kind: "message",
-          authMode: "inbound",
-          mayPair: false,
-        },
-        policy: {
-          dmPolicy: params.dmPolicy,
-          groupPolicy: params.groupPolicy,
-          groupAllowFromFallbackToAllowFrom: true,
-        },
-        allowFrom: params.allowFrom,
-        groupAllowFrom: params.groupAllowFrom,
-        command,
-      },
+  const ingress = createChannelIngressResolver({
+    channelId: "signal",
+    accountId: params.accountId,
+    identity: signalIngressIdentity,
+    cfg: params.cfg,
+    ...(params.readStoreAllowFrom ? { readStoreAllowFrom: params.readStoreAllowFrom } : {}),
+    useDefaultPairingStore: params.readStoreAllowFrom == null,
+  });
+  return await ingress.message({
+    subject: signalSubjectInput({
+      sender: params.sender,
+      groupId: isGroup ? params.groupId : undefined,
+    }),
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? (params.groupId ?? "unknown") : params.sender.raw,
     },
-  );
-  const effectiveGroupAllowFrom = groupResolved.senderAccess.effectiveGroupAllowFrom;
-  const dmAccess = directResolved.senderAccess;
-  const groupAccess = groupResolved.senderAccess;
-  const resolveAccessDecision = (isGroup: boolean) => (isGroup ? groupAccess : dmAccess);
-  const resolveCommandAccess = (isGroup: boolean) =>
-    (isGroup ? groupResolved : directResolved).commandAccess;
-  return {
-    resolveAccessDecision,
-    resolveCommandAccess,
-    dmAccess,
-    effectiveGroupAllow: effectiveGroupAllowFrom,
-  };
+    ...(isGroup ? { event: { mayPair: false } } : {}),
+    dmPolicy: params.dmPolicy,
+    groupPolicy: params.groupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: true },
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.groupAllowFrom,
+    command,
+  });
 }
 
 export async function handleSignalDirectMessageAccess(params: {

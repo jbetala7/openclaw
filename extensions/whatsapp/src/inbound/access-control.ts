@@ -73,9 +73,9 @@ export async function checkInboundAccessControl(params: {
   });
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
-    if (senderAccess.reason === "groupPolicy=disabled") {
+    if (senderAccess.reasonCode === "group_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked group message (groupPolicy: disabled)");
-    } else if (senderAccess.reason === "groupPolicy=allowlist (empty allowlist)") {
+    } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
       logWhatsAppVerbose(
         params.verbose,
         "Blocked group message (groupPolicy: allowlist, no groupAllowFrom)",
@@ -105,7 +105,7 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: policy.account.accountId,
       };
     }
-    if (senderAccess.decision === "block" && senderAccess.reason === "dmPolicy=disabled") {
+    if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked dm (dmPolicy: disabled)");
       return {
         allowed: false,

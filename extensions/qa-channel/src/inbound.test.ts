@@ -77,9 +77,9 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runPrepared).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
     expect(
-      vi.mocked(runtime.channel.turn.runPrepared).mock.calls[0]?.[0].ctxPayload.WasMentioned,
+      vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0]?.[0].ctxPayload.WasMentioned,
     ).toBe(true);
   });
 
@@ -95,7 +95,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
   });
 
   it("allows direct messages from configured senders", async () => {
@@ -110,13 +110,13 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runPrepared).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runtime.channel.turn.runPrepared).mock.calls[0]?.[0].ctxPayload).toMatchObject(
-      {
-        CommandAuthorized: true,
-        SenderId: "alice",
-      },
-    );
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0]?.[0].ctxPayload,
+    ).toMatchObject({
+      CommandAuthorized: true,
+      SenderId: "alice",
+    });
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
@@ -139,7 +139,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runPrepared).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
   });
 
   it("skips configured group messages that miss mention activation", async () => {
@@ -167,6 +167,6 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
   });
 });

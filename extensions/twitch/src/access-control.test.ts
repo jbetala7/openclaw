@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  checkTwitchAccessControl,
-  extractMentions,
-  resolveTwitchAccessControlIngress,
-} from "./access-control.js";
+import { checkTwitchAccessControl } from "./access-control.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 describe("checkTwitchAccessControl", () => {
@@ -373,75 +369,5 @@ describe("checkTwitchAccessControl", () => {
       expect(result.allowed).toBe(true);
       expect(result.matchSource).toBe("allowlist");
     });
-  });
-
-  describe("ingress redaction", () => {
-    it("does not serialize raw Twitch user IDs or allowlist entries in ingress state/decision", async () => {
-      const ingress = await resolveTwitchAccessControlIngress({
-        message: {
-          ...mockMessage,
-          userId: "raw-sensitive-user-id",
-          message: "@testbot hello",
-        },
-        account: {
-          ...mockAccount,
-          allowFrom: ["raw-sensitive-user-id"],
-        },
-        botUsername: "testbot",
-      });
-
-      const serialized = JSON.stringify({
-        state: ingress.state,
-        decision: ingress.decision,
-      });
-      expect(serialized).not.toContain("raw-sensitive-user-id");
-    });
-  });
-});
-
-describe("extractMentions", () => {
-  it("extracts single mention", () => {
-    const mentions = extractMentions("hello @testbot");
-    expect(mentions).toEqual(["testbot"]);
-  });
-
-  it("extracts multiple mentions", () => {
-    const mentions = extractMentions("hello @testbot and @otheruser");
-    expect(mentions).toEqual(["testbot", "otheruser"]);
-  });
-
-  it("returns empty array when no mentions", () => {
-    const mentions = extractMentions("hello everyone");
-    expect(mentions).toStrictEqual([]);
-  });
-
-  it("handles mentions at start of message", () => {
-    const mentions = extractMentions("@testbot hello");
-    expect(mentions).toEqual(["testbot"]);
-  });
-
-  it("handles mentions at end of message", () => {
-    const mentions = extractMentions("hello @testbot");
-    expect(mentions).toEqual(["testbot"]);
-  });
-
-  it("converts mentions to lowercase", () => {
-    const mentions = extractMentions("hello @TestBot");
-    expect(mentions).toEqual(["testbot"]);
-  });
-
-  it("extracts alphanumeric usernames", () => {
-    const mentions = extractMentions("hello @user123");
-    expect(mentions).toEqual(["user123"]);
-  });
-
-  it("handles underscores in usernames", () => {
-    const mentions = extractMentions("hello @test_user");
-    expect(mentions).toEqual(["test_user"]);
-  });
-
-  it("handles empty string", () => {
-    const mentions = extractMentions("");
-    expect(mentions).toStrictEqual([]);
   });
 });

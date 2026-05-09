@@ -2,7 +2,6 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
-import { resolveAccessFactsCommandAuthorized } from "../message-access/access-facts-compat.js";
 import type {
   AccessFacts,
   ConversationFacts,
@@ -101,6 +100,13 @@ export function filterChannelTurnSupplementalContext(params: {
     forwarded,
     thread,
   };
+}
+
+function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
+  const commands = access?.commands;
+  return typeof commands?.authorized === "boolean"
+    ? commands.authorized
+    : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
 export function buildChannelTurnContext(

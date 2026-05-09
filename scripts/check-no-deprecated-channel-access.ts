@@ -36,8 +36,25 @@ const RULES: Rule[] = [
     pattern: /\bresolveDmGroupAccessWith(?:Lists|CommandGate)\b/u,
   },
   {
+    label: "deprecated DM/group access reason constants",
+    pattern: /\bDM_GROUP_ACCESS_REASON\b/u,
+  },
+  {
+    label: "deprecated group policy access helper",
+    pattern:
+      /\b(?:resolveSenderScopedGroupPolicy|evaluateSenderGroupAccess(?:ForPolicy)?|evaluateGroupRouteAccessForPolicy|evaluateMatchedGroupAccessForPolicy)\b/u,
+  },
+  {
+    label: "deprecated group access compatibility module",
+    pattern: /from\s+["']openclaw\/plugin-sdk\/group-access["']/u,
+  },
+  {
     label: "deprecated command authorization helper",
     pattern: /\bresolveSenderCommandAuthorization(?:WithRuntime)?\b/u,
+  },
+  {
+    label: "deprecated command auth SDK facade",
+    pattern: /from\s+["']openclaw\/plugin-sdk\/command-auth["']/u,
   },
   {
     label: "deprecated AccessFacts command authorizers",

@@ -73,7 +73,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       if (senderAccess.senderAccess.decision !== "allow") {
         log.debug?.("dropping reaction (access denied)", {
           sender: senderId,
-          reason: senderAccess.senderAccess.reason,
+          reason: senderAccess.senderAccess.reasonCode,
         });
         return;
       }
