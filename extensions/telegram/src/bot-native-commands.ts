@@ -659,7 +659,7 @@ async function resolveTelegramCommandAuth(params: {
           useAccessGroups,
           eventKind: "native-command",
         })
-      ).commandAuthorized;
+      ).authorized;
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
